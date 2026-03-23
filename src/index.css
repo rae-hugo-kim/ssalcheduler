@@ -13,6 +13,23 @@
   --color-muted: #f5f5f5;
   --color-muted-foreground: #737373;
   --color-border: #e5e5e5;
+
+  /* 근무 타입 색상 */
+  --color-work-open: #fef08a;
+  --color-work-middle: #bbf7d0;
+  --color-work-close: #ddd6fe;
+  --color-work-allday: #bfdbfe;
+
+  /* 휴일 타입 색상 */
+  --color-leave-annual: #fed7aa;
+  --color-leave-half: #fde68a;
+  --color-leave-substitute: #d4d4d8;
+  --color-leave-sick: #fecaca;
+  --color-leave-request: #fbcfe8;
+
+  /* 요일 배경 */
+  --color-day-saturday: #eff6ff;
+  --color-day-sunday: #fef2f2;
   --color-primary: #2563eb;
   --color-primary-foreground: #ffffff;
   --color-destructive: #dc2626;
