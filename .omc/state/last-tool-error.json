@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"npx shadcn@latest init -d --defaults 2>&1\",\"timeout\":60000,\"description\":\"Initialize shadcn/ui with defaults\"}",
+  "error": "Exit code 1\nnpm warn exec The following package was not found and will be installed: shadcn@4.1.0\nnpm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead\n- Preflight checks.\n✔ Preflight checks.\n- Verifying framework.\n✔ Verifying framework. Found Vite.\n- Validating Tailwind CSS. Found v4.\n✔ Validating Tailwind CSS. Found v4.\n- Validating import alias.\n✖ Validating import alias.\n\nNo import alias found in your tsconfig.json file.\nVisit https://ui.shadcn.com/docs...",
+  "timestamp": "2026-03-23T06:25:24.267Z",
+  "retry_count": 1
+}
