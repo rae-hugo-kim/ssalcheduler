@@ -26,7 +26,7 @@ description: Migrate an existing Claude Code project to the OMP native harness (
 |------|------------------|
 | **git 레포여야 함** | 비-git 디렉토리면 중단 (보험 태그 불가) |
 | **보험 태그 먼저** | 하네스 파일을 건드리기 전에 `pre-omp-migration` 태그를 박는다 |
-| **커스텀 정책 보존** | sync는 rules/AGENTS.md를 무조건 덮어쓴다 — 프로젝트 고유 커스텀은 덮어쓰기 전에 사용자 확인 |
+| **커스텀 정책 보존** | sync는 `.omp/rules/harness-*.md`·AGENTS.md를 무조건 덮어쓴다 — 프로젝트 고유 커스텀은 덮어쓰기 전에 사용자 확인 |
 | **사용자 코드 불가침** | 화이트리스트(하네스 자산)만 변경. `src/`·`docs/` 등은 건드리지 않음 |
 
 ## Workflow
@@ -69,11 +69,17 @@ git push origin pre-omp-migration
 
 ### Phase 2: 커스텀 정책 감사 (sync가 덮어쓰기 전에 — STOP 게이트)
 
-`harness-sync.sh`는 `rules/ checklists/ templates/ AGENTS.md INDEX.md EXAMPLES.md`를 **무조건 원격본으로 덮어쓴다**(remote wins). 프로젝트 고유 커스텀이 있으면 사라지므로, 먼저 diff로 드러낸다.
+`harness-sync.sh`는 `.omp/rules/harness-*.md checklists/ templates/ AGENTS.md INDEX.md EXAMPLES.md`를 **무조건 원격본으로 덮어쓴다**(remote wins). 프로젝트 고유 커스텀이 있으면 사라지므로, 먼저 diff로 드러낸다. Claude Code 시절 레포의 `rules/`는 이제 하네스 디렉터리가 아니다 — 그 안의 커스텀도 같은 감사 대상이다.
 
 ```bash
-for d in rules checklists templates; do
+for d in checklists templates; do
   [[ -d "$d" ]] && diff -rq "$d" "$TMPL/$d" 2>/dev/null
+done
+# legacy rules/<name>.md vs the template's .omp/rules/harness-<name>.md
+for f in rules/*.md; do
+  [[ -f "$f" ]] || continue; n=$(basename "$f" .md)
+  if [[ -f "$TMPL/.omp/rules/harness-$n.md" ]]; then diff -q "$f" "$TMPL/.omp/rules/harness-$n.md" || true
+  else echo "consumer-only: $f"; fi
 done
 [[ -f CLAUDE.md ]] && diff CLAUDE.md "$TMPL/AGENTS.md" 2>/dev/null | head -50
 ```
@@ -81,7 +87,7 @@ done
 - 차이가 **하네스 표준 텍스트 차이뿐**(claude판 서술 vs omp판 서술)이면 → 그대로 진행.
 - 차이에 **프로젝트 고유 정책/용어/규칙**이 있으면 → **STOP**. 사용자에게 보여주고 결정:
   - 하네스 레벨 개선이면 → 템플릿(omp 레포)에 기여 후 진행.
-  - 프로젝트 고유 맥락이면 → sync 대상이 **아닌** 곳으로 이동(`docs/`, kickoff `seed.yaml`, `claudedocs/`). **AGENTS.md·rules/에 두면 다음 sync에서 사라짐**을 명시.
+  - 프로젝트 고유 맥락이면 → sync 대상이 **아닌** 곳으로 이동(`docs/`, kickoff `seed.yaml`, `claudedocs/`). **AGENTS.md·`.omp/rules/harness-*` 이름에 두면 다음 sync에서 사라짐**을 명시. 프로젝트 규칙은 `.omp/rules/<name>.md`(`harness-` 접두사 금지)에 두면 sync가 건드리지 않는다.
   - 명시적 "진행" 확인 전까지 다음 단계로 가지 않는다.
 
 ### Phase 3: 하네스 동기화 (엔진 재사용)
@@ -92,7 +98,19 @@ cp "$TMPL/scripts/harness-sync.sh" scripts/harness-sync.sh
 bash scripts/harness-sync.sh        # 최신 태그 재클론 → 화이트리스트 전부 덮어쓰기/추가 + meta 주입
 ```
 
-이 한 번으로 들어오는 것: `AGENTS.md INDEX.md EXAMPLES.md rules/ checklists/ templates/ .omp/extensions/harness/(게이트 + index.ts) .omp/skills/(전부) .omp/agents/ scripts/harness-*.sh .githooks/post-commit` + `harness-meta.json`(unregistered면 `source_remote`를 default로 등록 → 이후 `session_start`마다 드리프트 알림).
+이 한 번으로 들어오는 것: `AGENTS.md INDEX.md EXAMPLES.md .omp/rules/harness-*.md checklists/ templates/ .omp/extensions/harness/(게이트 + index.ts) .omp/skills/(전부) .omp/agents/ scripts/harness-*.sh .githooks/post-commit` + `harness-meta.json`(unregistered면 `source_remote`를 default로 등록 → 이후 `session_start`마다 드리프트 알림).
+
+**레거시 `rules/` 정리 (ADR 002)**: 하네스 규칙은 `.omp/rules/harness-<name>.md`로 옮겨졌고 `rules/`는 더 이상 화이트리스트 디렉터리가 아니다. sync 스크립트 7c 단계가 직전 동기화 트리(`refs/harness/<prev>`)와 blob이 같은 파일만 지우고, 소비자가 고치거나 추가한 파일은 남긴 채 advisory를 낸다. 직전 트리가 없는 레포(`refs/harness/*` 부재)는 아무것도 지우지 않으므로 Phase 2 diff 결과대로 손으로 정리한다. 프로젝트 문서가 `rules/<name>.md`를 링크하고 있으면 치환한다:
+
+```bash
+# perl -pi: BSD/macOS sed has no portable in-place -E. `git grep -z` scopes to TRACKED files
+# (node_modules etc. excluded) and NUL-delimits names; `--` keeps an odd name from being read
+# as a perl option. Boundary: a path char before `rules/` (docs/rules/, .omp/rules/, lint-rules/)
+# is left alone; a leading `./` is accepted.
+while IFS= read -r -d '' f; do
+  perl -pi -e 's#(^|[^A-Za-z0-9_./-])((?:\./)?(?:\.\./)*)rules/([a-z_]+)\.md#$1$2.omp/rules/harness-$3.md#g' -- "$f"
+done < <(git grep -lzE '(^|[^A-Za-z0-9_./-])(\./)?(\.\./)*rules/[a-z_]+\.md' -- '*.md' ':!docs/rules/*')
+```
 
 ### Phase 4: Claude Code 레이어 제거
 
@@ -167,7 +185,7 @@ rm -rf "$TMPL"
 
 - 보험 태그: `pre-omp-migration` (원격 푸시됨) — 복귀: `git checkout pre-omp-migration -- .claude CLAUDE.md .gitignore`
 - 제거됨: `.claude/`, `CLAUDE.md`, `.omc/harness-state`
-- 이식됨: AGENTS.md, 게이트, 에이전트, 스킬, rules/checklists/templates
+- 이식됨: AGENTS.md, 게이트, 에이전트, 스킬, .omp/rules/harness-*·checklists/templates
 
 ### 다음 단계
 **하네스는 이 폴더에서 omp 세션을 새로 열어야 적용됩니다** (지금 세션 cwd엔 확장이 로드되지 않음):

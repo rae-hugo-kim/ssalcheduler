@@ -1,6 +1,6 @@
 # Quality Gate Checklist
 
-Use this checklist at the appropriate trigger level. Only run the gates required for your current stage (see `rules/quality_gates.md` for the trigger table).
+Use this checklist at the appropriate trigger level. Only run the gates required for your current stage (see `.omp/rules/harness-quality_gates.md` for the trigger table).
 
 ## Discovery
 
@@ -31,4 +31,4 @@ Use this checklist at the appropriate trigger level. Only run the gates required
 Notes:
 
 - Automated hooks (e.g., `quality-gate.js`) may enforce FORMAT and LINT after file edits. If present, those checks run automatically — still verify the output.
-- "EVAL applicable" = change affects LLM output, ranking, visual output, or performance baseline. See `rules/verification_tests_and_evals.md`.
+- "EVAL applicable" = change affects LLM output, ranking, visual output, or performance baseline. See `.omp/rules/harness-verification_tests_and_evals.md`.

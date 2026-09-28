@@ -34,11 +34,14 @@
 //
 // Deliberate scope / known gaps (documented, asserted in tests):
 //   - Cross-repo targeting (`git -C other commit`) is NOT special-cased — still detected.
-//   - Commit hidden inside command substitution (`echo "$(git commit)"`), `env -S "git
-//     commit"` split-string exec, `case … esac` pattern bodies, backslash-escaped
-//     program names (`\git commit`), leading redirections before the command
-//     (`>out git commit`), and process substitution (`cat <(git commit)`) are NOT
-//     detected — all exotic and outside the (non-adversarial) agent threat model.
+//   - The exact detector does not parse quoted command substitution, `env -S` split-string
+//     exec, or dynamic subcommands. The dispatcher-level isCommitSuspect boundary now blocks
+//     those forms plus eval/re-parsing executors. `case … esac` pattern bodies remain outside
+//     the non-adversarial static model.
+//   - Leading redirections (`>out git commit -a`) are detected and then rejected by the
+//     standalone rule. Unquoted substitutions swallowed as Git option values become
+//     unresolved; process substitution is rejected. Backslash escapes (`\git`,
+//     `/repo\ with\ spaces`) fold like bash, so they cannot hide a program or split a path.
 //   - Sequencer continuations that CREATE commits (`git merge --continue`,
 //     `git cherry-pick --continue`, `git revert --continue`, `git rebase --continue`)
 //     are NOT detected — the subcommand is not `commit`. Deliberate: this workflow is
@@ -54,6 +57,9 @@
 //   - A few exotic forms OVER-detect (fail-closed, harmless): `command -v git commit`
 //     and `xargs echo git commit` are lookups/echoes, not commits, but report true.
 //   - Past MAX_DEPTH of nested `bash -c`, detection FAILS CLOSED (treats it as a commit).
+
+import { realpathSync } from 'fs';
+import { dirname, join } from 'path';
 
 const MAX_DEPTH = 5;
 
@@ -81,11 +87,15 @@ function basename(t) {
   const i = t.lastIndexOf('/');
   return i >= 0 ? t.slice(i + 1) : t;
 }
-function isAssign(t) { return /^[A-Za-z_][A-Za-z0-9_]*=/.test(t); }
+function isAssign(t) { return /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(t); }   // NAME= and bash NAME+=
 function isShellProg(b) { return b === 'git' || b === 'bash' || b === 'sh'; }
 
+
 // Split a command into top-level segments, dropping comments and heredoc bodies.
-function lexSegments(cmd) {
+// Optional `meta` receives { background: true } when an unquoted lone `&` operator is
+// seen (background job) — `&&` is excluded by its own branch, and quoted/heredoc-body
+// `&` never reaches the operator branch, so consumers get a false-positive-free signal.
+function lexSegments(cmd, meta) {
   const segs = [];
   let cur = '', i = 0, q = null;            // q = "'" or '"' while inside that quote
   const heredocs = [];                       // delimiters opened on the current line
@@ -97,11 +107,15 @@ function lexSegments(cmd) {
       if (c === '\\' && nx !== undefined) { cur += c + nx; i += 2; continue; }
       cur += c; if (c === '"') q = null; i++; continue;
     }
-    if (c === '\\' && nx === '\n') { i += 2; continue; }                       // line join
-    if (c === '\\' && nx === '\r' && cmd[i + 2] === '\n') { i += 3; continue; } // CRLF join
+    if (c === '\\' && nx === '\n') { i += 2; continue; }                       // line join (LF only)
+    // NOTE deliberately NO unquoted CRLF join: bash reads `\`+CR as an ESCAPED CR (a
+    // literal CR character in the word) and the following LF as a real command separator
+    // — joining them would merge two commands and hide a trailing commit (review r4).
     if (c === '\\' && nx !== undefined) { cur += c + nx; i += 2; continue; }    // escape
     if (c === "'" || c === '"') { q = c; cur += c; i++; continue; }
-    if (c === '#' && (cur === '' || /\s$/.test(cur))) {                        // comment
+    // Comment: `#` after UNESCAPED whitespace. `foo\ #bar` is one word in bash (the
+    // escaped space joins), so a `\ ` tail must NOT open a comment (review r4).
+    if (c === '#' && (cur === '' || (/\s$/.test(cur) && !/\\[\s]$/.test(cur)))) {
       while (i < n && cmd[i] !== '\n') i++;
       continue;
     }
@@ -138,28 +152,43 @@ function lexSegments(cmd) {
     }
     if (c === '&' && nx === '&') { segs.push(cur); cur = ''; i += 2; continue; }
     if (c === '|' && nx === '|') { segs.push(cur); cur = ''; i += 2; continue; }
-    if (c === ';' || c === '|' || c === '&') { segs.push(cur); cur = ''; i++; continue; }
+    if (c === ';' || c === '|' || c === '&') {
+      if (c === '&' && meta) meta.background = true;
+      segs.push(cur); cur = ''; i++; continue;
+    }
     cur += c; i++;
   }
   segs.push(cur);
   return segs;
 }
 
-// Quote-aware tokenizer: splits on unquoted whitespace and ( ) { } metacharacters,
-// stripping the quotes.
+// Quote-aware tokenizer: splits on unquoted whitespace and ( ) metacharacters, stripping
+// the quotes. Bash-exact backslash semantics (review 2026-07-24 round 3):
+//   unquoted `\x`  -> folds to `x` (`repo\ x` is ONE word, `\git` is the program `git`);
+//   double-quoted  -> folds ONLY before $ ` " \ and newline; any other `\x` keeps BOTH
+//                     characters, exactly like bash (`"/tmp/a\q"` stays `/tmp/a\q`).
+// `{`/`}` are NOT split (bash keeps `x{}` literal without comma/range); grouping braces
+// arrive whitespace-separated and still become their own reserved-word tokens.
 function tokenize(s) {
   const toks = [];
   let cur = '', i = 0, q = null, started = false;
   while (i < s.length) {
     const c = s[i], n = s[i + 1];
     if (q) {
-      if (q === '"' && c === '\\' && n !== undefined) { cur += n; i += 2; started = true; continue; }
+      if (q === '"' && c === '\\' && n !== undefined) {
+        if (n === '\n') { i += 2; continue; }            // line continuation: bash removes BOTH, even in ""
+        // NOTE deliberately NO CRLF case: bash preserves `\` + CR + LF bytes verbatim in
+        // double quotes (measured 5c 0d 0a in argv) — only backslash+LF is a continuation.
+        if (n === '$' || n === '`' || n === '"' || n === '\\') { cur += n; i += 2; }
+        else { cur += c; i += 1; }                       // bash keeps the backslash here
+        started = true; continue;
+      }
       if (c === q) { q = null; i++; continue; }
       cur += c; i++; started = true; continue;
     }
+    if (c === '\\' && n !== undefined) { cur += n; i += 2; started = true; continue; }
     if (c === "'" || c === '"') { q = c; i++; started = true; continue; }
-    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' ||
-        c === '(' || c === ')' || c === '{' || c === '}') {
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '(' || c === ')') {
       if (started) { toks.push(cur); cur = ''; started = false; }
       i++; continue;
     }
@@ -169,25 +198,43 @@ function tokenize(s) {
   return toks;
 }
 
-// Locate the index of the program token to analyze, or -1. Skips leading env-assignments
-// and shell reserved words; for a wrapper command, scans past its options for the first
-// git/bash/sh program (so unknown wrapper option arity can never hide the real command).
-function programIndex(toks) {
+// Enumerate ALL plausible program positions. Wrapper option ARITY is not modelled, so an
+// option VALUE spelled like a program (`sudo -u git -E git commit`, `sudo -u git /usr/bin/env
+// git …`) is indistinguishable from the program itself. Commit-scan paths therefore try
+// EVERY candidate — any parse that reaches `commit` counts (fail-closed detection), and
+// the resolver collapses multi-candidate ambiguity to unresolved.
+function programCandidates(toks) {
+  // Skip leading assignments, reserved words, AND redirections (`> f git commit -a` is a
+  // legal bash form — the redirection must not hide the program from detection; the
+  // standalone rule then rejects the redirection token itself).
   let i = 0;
-  while (i < toks.length && (isAssign(toks[i]) || RESERVED.has(toks[i]))) i++;
-  if (i >= toks.length) return -1;
-  const b = basename(toks[i]);
-  if (isShellProg(b)) return i;
-  if (WRAPPER.has(b)) {
-    for (let k = i + 1; k < toks.length; k++) {
-      const t = toks[k];
-      if (WRAPPER_TERMINAL_OPT.has(t)) return -1;       // wrapper prints help/version, never runs git
-      if (isShellProg(basename(t))) return k;
-    }
-    return -1;
+  while (i < toks.length) {
+    const t = toks[i];
+    if (isAssign(t) || RESERVED.has(t)) { i++; continue; }
+    const r = redirToken(t);
+    if (r) { i += r.standalone ? 2 : 1; continue; }
+    break;
   }
-  return i;                                              // some other program -> analyzed, will be non-git
+  if (i >= toks.length) return [];
+  const b = basename(toks[i]);
+  if (isShellProg(b)) return [i];
+  if (WRAPPER.has(b)) {
+    const out = [];
+    for (let k = i + 1; k < toks.length; k++) {
+      if (WRAPPER_TERMINAL_OPT.has(toks[k])) break;      // wrapper prints help/version
+      if (isShellProg(basename(toks[k]))) out.push(k);
+    }
+    return out;
+  }
+  return [i];                                            // some other program -> analyzed, non-git
 }
+
+// An option-VALUE token produced by tokenize() from a shredded command substitution:
+// `$(cmd)` loses its parens, so `-C $(pwd)` yields value `$` and `-C /tmp/$(x)` yields
+// value `/tmp/$` — any value ENDING in `$` (or carrying a backtick) marks the position
+// scan as untrustworthy; consumers keep scanning for `commit` and fail closed. A literal
+// dirname ending in `$` is over-rejected — conservative by design.
+const substShredValue = (v) => v.endsWith('$') || v.includes('`');
 
 // If toks is a bash/sh invocation, return the inner `-c` script string, else null.
 function bashDashCPayload(toks) {
@@ -203,30 +250,39 @@ function bashDashCPayload(toks) {
 }
 
 function gitSubcommandIsCommit(toks) {
-  let i = 1;
+  let i = 1, subst = false;
   while (i < toks.length) {
     const t = toks[i];
     if (!t.startsWith('-')) break;
     if (GIT_TERMINAL_OPT.has(t) || t.startsWith('--list-cmds')) return false;
-    if (GIT_OPT_WITH_ARG.has(t)) { i += 2; continue; }
-    i += 1;                                          // --opt=value or boolean global flag
+    if (GIT_OPT_WITH_ARG.has(t)) {
+      const v = toks[i + 1] ?? '';
+      if (substShredValue(v)) subst = true;              // `$(…)` shreds to `$`/`…$` value tokens
+      i += 2; continue;
+    }
+    i += 1;                                              // --opt=value or boolean global flag
   }
-  return toks[i] === 'commit';
+  if (toks[i] === 'commit') return true;
+  // A substitution swallowed as an option value hides the true subcommand position
+  // (`git -C $(pwd) commit`): fail closed if `commit` appears anywhere after it.
+  if (subst) { for (; i < toks.length; i++) if (toks[i] === 'commit') return true; }
+  return false;
 }
 
 function segmentIsGitCommit(seg, depth) {
   const toks = tokenize(seg);
-  const pi = programIndex(toks);
-  if (pi < 0) return false;
-  const rest = toks.slice(pi);
-  const b = basename(rest[0]);
-  if (b === 'bash' || b === 'sh') {
-    const inner = bashDashCPayload(rest);
-    if (inner === null) return false;
-    if (depth >= MAX_DEPTH) return true;             // fail CLOSED on pathological nesting
-    return anySegmentIsCommit(inner, depth + 1);
+  for (const pi of programCandidates(toks)) {
+    const rest = toks.slice(pi);
+    const b = basename(rest[0]);
+    if (b === 'bash' || b === 'sh') {
+      const inner = bashDashCPayload(rest);
+      if (inner === null) continue;
+      if (depth >= MAX_DEPTH) return true;               // fail CLOSED on pathological nesting
+      if (anySegmentIsCommit(inner, depth + 1)) return true;
+      continue;
+    }
+    if (b === 'git' && gitSubcommandIsCommit(rest)) return true;
   }
-  if (b === 'git') return gitSubcommandIsCommit(rest);
   return false;
 }
 
@@ -242,6 +298,235 @@ export function isGitCommit(command) {
   return anySegmentIsCommit(command, 0);
 }
 
+// --- command-layer tripwire (AC3) --------------------------------------------
+// Enforcement lives in .githooks/pre-commit. The command layer therefore stops
+// trying to recognize every shell spelling that could reach a commit (the 6th
+// review proved that game unwinnable) and watches exactly ONE finite, git-DEFINED
+// surface: the documented handles that make git SKIP or RELOCATE its own hooks.
+// A missed exotic spelling is harmless here — if the hook was not skipped, the hook
+// still enforces. Only a declared bypass needs to be caught.
+//
+// Deliberately NOT checked: the session's ambient process environment. The
+// 2026-07-27 incident (Orca launcher exporting GIT_CONFIG_COUNT for credentials)
+// blocked every commit in the session because ambient GIT_CONFIG_* was read as
+// retargeting. Ambient variables apply to git AND its hooks alike, so they cannot
+// desynchronize the two; only what a CALL injects can. GIT_CONFIG_* is therefore
+// judged by KEY, not by prefix (test-attack A-3).
+const TRIPWIRE_RETARGET_ENV = /^GIT_(DIR|WORK_TREE|INDEX_FILE|NAMESPACE|COMMON_DIR|CEILING_DIRECTORIES|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)$/;
+// Config keys that move the repo root/worktree/hooks, directly or via file indirection.
+const TRIPWIRE_RETARGET_CONFIG_KEY = /^(core\.hooks?path|core\.worktree|core\.bare|core\.git-?dir|core\.common-?dir|include\.|includeif\.)/i;
+// `--no-verify` by git's unambiguous-prefix rule, plus its independent short alias `-n`.
+const TRIPWIRE_NO_VERIFY_LONG = /^--no-v(?:e(?:r(?:i(?:f(?:y)?)?)?)?)?$/;
+const TRIPWIRE_RETARGET_LONG = /^--(git-dir|work-tree|namespace)$/;
+// Long options whose value is the NEXT token when not attached with `=`. Skipping their
+// value is what keeps `git commit -m --no-verify` (a message that looks like a flag) and
+// `git commit -F -n` (a path) from reading as a declared bypass.
+const TRIPWIRE_LONG_VALUE = new Set([
+  '--message', '--file', '--author', '--date', '--template', '--reuse-message',
+  '--reedit-message', '--fixup', '--squash', '--trailer', '--cleanup', '--config-env',
+  '--git-dir', '--work-tree', '--namespace', '--pathspec-from-file', '-C', '-c',
+  // Separated-value forms MEASURED against git 2.43 (`git --attr-source HEAD commit` consumes
+  // HEAD). Only options whose value is REQUIRED belong here: `--gpg-sign`/`--untracked-files`
+  // take OPTIONAL values, so git reads `--gpg-sign -n` as a bare flag plus `-n` — consuming the
+  // next token there would swallow a real bypass (round 5, L4; `--super-prefix` no longer
+  // exists and `--exec-path` with no `=` is the query form).
+  '--attr-source',
+]);
+// Short options whose value is the rest of the cluster, else the next token.
+const TRIPWIRE_SHORT_VALUE = new Set(['m', 'F', 'C', 'c', 't']);
+// Short options whose value attaches ONLY glued/`=` (never the next token): the glued
+// remainder is a VALUE, so its letters must not be read as flags — `-unormal` is
+// `-u normal`, not a `-n`. classifyCommitArgs models this the same way.
+const TRIPWIRE_SHORT_GLUED_VALUE = new Set(['S', 'u']);
+
+function tripwireEnvReason(env) {
+  if (!env || typeof env !== 'object') return null;
+  for (const [k, v] of Object.entries(env)) {
+    if (TRIPWIRE_RETARGET_ENV.test(k)) {
+      return `the call injects ${k}, which points git at another repository/index than the one whose hooks would run`;
+    }
+    if (/^GIT_CONFIG_KEY_\d+$/.test(k) && typeof v === 'string' && TRIPWIRE_RETARGET_CONFIG_KEY.test(v.trim())) {
+      return `the call injects ${k}=${v}, a config key that relocates the repo root, worktree, or hooks path`;
+    }
+    // GIT_CONFIG_PARAMETERS is git's own internal config channel and honors the same keys. It
+    // carries MANY pairs — modern git quotes them ("'a.b'='x' 'c.d'='y'"), older forms do not
+    // ("a.b=x c.d=y") — so every pair's KEY is inspected in either shape (review rounds 2–3).
+    // The shapes are checked EXCLUSIVELY: splitting a quoted string on whitespace also walks
+    // into VALUES, so a credential helper whose value merely contained "core.hooksPath" was
+    // falsely blocked (review round 4).
+    if (k === 'GIT_CONFIG_PARAMETERS' && typeof v === 'string') {
+      const quoted = v.match(/'([^']*)'\s*=/g);
+      const keys = quoted && quoted.length > 0
+        ? quoted
+        : v.split(/\s+/).filter(Boolean).map((pair) => pair.split('=')[0]);
+      if (keys.some((raw) => TRIPWIRE_RETARGET_CONFIG_KEY.test(raw.replace(/['"=\s]/g, '')))) {
+        return `the call injects ${k}, which sets a config key that relocates the repo root, worktree, or hooks path`;
+      }
+    }
+    if ((k === 'GIT_CONFIG_GLOBAL' || k === 'GIT_CONFIG_SYSTEM') && v !== '/dev/null') {
+      return `the call injects ${k}=${v}, an alternate config source that can set core.hooksPath`;
+    }
+  }
+  return null;
+}
+
+// Walk ONE git invocation's arguments the way git parses them: `--` ends option parsing,
+// value-taking options consume their value, and a glued value is never re-read as flags.
+// Without that model the tripwire both missed real bypasses and blocked ordinary commits
+// whose message happened to look like a flag (review round 1 high #3 + medium).
+//
+// `kind` scopes the surface to WRITE-side invocations. Round 2 measured the cost of not
+// doing that: `git -c core.hooksPath=/tmp/x status`, `GIT_INDEX_FILE=… git read-tree HEAD`
+// and `GIT_DIR=… git log` were all blocked though they cannot skip a commit gate, and
+// `git merge --no-verify` was blocked although merges are deliberately never gated.
+//   'commit' — every handle applies (the gates run for this invocation)
+//   'push'   — only `--no-verify`, which skips .githooks/pre-push (`-n` there is --dry-run)
+//   'other'  — nothing: reading or rewriting history cannot bypass the commit gates
+function tripwireArgReason(toks, kind = 'commit', postVerb = false) {
+  // `-c`/`--config-env` are GLOBAL options: git only honors them before the verb. After it, `-c`
+  // is `--reedit-message` and takes a commit-ish, so reading it as config could block an ordinary
+  // commit (review round 4). The first bare token IS the verb — except in an alias BODY, which by
+  // construction starts after the verb it defines (round 5, L5).
+  let sawVerb = postVerb;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (typeof t !== 'string' || t.length === 0) continue;
+    if (t === '--') return null;                                  // pathspecs only from here
+    if (kind === 'commit' && /^GIT_[A-Z0-9_]*\+?=/.test(t)) {
+      const eq = t.indexOf('=');
+      const inline = tripwireEnvReason({ [t.slice(0, eq).replace(/\+$/, '')]: t.slice(eq + 1) });
+      if (inline) return inline;
+      continue;
+    }
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t : t.slice(0, eq);
+      const attached = eq === -1 ? null : t.slice(eq + 1);
+      if (TRIPWIRE_NO_VERIFY_LONG.test(name)) {
+        if (kind === 'commit') {
+          return 'the commit passes --no-verify, which makes git skip the pre-commit gates entirely';
+        }
+        if (kind === 'push') {
+          return 'the push passes --no-verify, which skips .githooks/pre-push (the archive-leak and docs-drift boundary)';
+        }
+      }
+      if (kind === 'commit' && TRIPWIRE_RETARGET_LONG.test(name)) {
+        return `the commit carries ${name}, which relocates the repository whose hooks would run`;
+      }
+      if (kind === 'commit' && !sawVerb && name === '--config-env') {
+        const val = attached ?? toks[i + 1];
+        if (typeof val === 'string' && TRIPWIRE_RETARGET_CONFIG_KEY.test(val.trim())) {
+          return `the call sets ${val.split('=')[0]} via --config-env, a config key that relocates the repo root, worktree, or hooks path`;
+        }
+      }
+      if (attached === null && TRIPWIRE_LONG_VALUE.has(name)) i += 1;   // value is the next token
+      continue;
+    }
+    if (t.startsWith('-') && t.length > 1) {
+      const letters = t.slice(1);
+      for (let j = 0; j < letters.length; j++) {
+        const c = letters[j];
+        if (TRIPWIRE_SHORT_GLUED_VALUE.has(c)) break;               // rest of the cluster is a value
+        if (c === 'n' && kind === 'commit') {
+          return 'the commit passes -n (--no-verify), which makes git skip the pre-commit gates entirely';
+        }
+        if (c === 'c' || c === 'C') {
+          const val = j === letters.length - 1 ? toks[i + 1] : letters.slice(j + 1);
+          if (kind === 'commit' && !sawVerb && c === 'c' && typeof val === 'string' && TRIPWIRE_RETARGET_CONFIG_KEY.test(val.trim())) {
+            return `the call sets ${val.split('=')[0]}, a config key that relocates the repo root, worktree, or hooks path`;
+          }
+          if (j === letters.length - 1) i += 1;
+          break;
+        }
+        if (TRIPWIRE_SHORT_VALUE.has(c)) {
+          if (j === letters.length - 1) i += 1;                      // value is the next token
+          break;                                                     // else glued value
+        }
+      }
+      continue;
+    }
+    sawVerb = true;
+  }
+  return null;
+}
+
+// Classify ONE git invocation: which enforcement surface could this call skip, and what did an
+// argv-local alias definition put in its argv? `-c alias.c=commit` resolves to a commit at
+// runtime, and `-c "alias.c=commit --no-verify"` ALSO carries the bypass flag inside the
+// definition — reading only the verb missed it entirely (review round 3, M4).
+function gitInvocationInfo(rest) {
+  const aliases = new Map();          // alias name -> { verb, body }
+  let verb = null;
+  const noteAlias = (raw) => {
+    // Config section/key names are case-insensitive to git, so `-c ALIAS.c=commit` defines the
+    // same alias (review round 4). The alias NAME is matched case-insensitively below for the
+    // same reason.
+    const m = /^alias\.([A-Za-z0-9_.-]+)=\s*!?\s*(?:git\s+)?([A-Za-z0-9_-]+)(.*)$/i.exec(raw);
+    if (m) aliases.set(m[1].toLowerCase(), { verb: m[2], body: m[3] ?? '' });
+  };
+  for (let i = 1; i < rest.length; i++) {
+    const t = rest[i];
+    if (typeof t !== 'string' || t.length === 0) continue;
+    if (t === '-c' || t === '--config-env') {
+      noteAlias(rest[i + 1] ?? '');
+      i += 1;
+      continue;
+    }
+    if (t.startsWith('-')) {
+      const name = t.includes('=') ? t.slice(0, t.indexOf('=')) : t;
+      if (name === '--config-env' && t.includes('=')) { noteAlias(t.slice(t.indexOf('=') + 1)); continue; }
+      if (!t.includes('=') && TRIPWIRE_LONG_VALUE.has(name)) i += 1;
+      continue;
+    }
+    verb = t;
+    break;
+  }
+  if (verb === null) return { kind: 'other', aliasBody: '' };
+  const alias = aliases.get(verb.toLowerCase());
+  const resolved = alias?.verb ?? verb;
+  const kind = resolved === 'commit' ? 'commit' : resolved === 'push' ? 'push' : 'other';
+  return { kind, aliasBody: alias?.body ?? '' };
+}
+
+/**
+ * Reason string when a call declares a bypass of a harness hook, else null.
+ * `env` is the CALL's injected environment (never the session's ambient environment).
+ *
+ * Scope is the WRITE side only: a commit invocation (including via an argv-local alias) can
+ * skip the pre-commit gates, and a push can skip .githooks/pre-push. Read-only and
+ * history-rewriting calls carry no gate to skip, so their `-c`/`GIT_*` idioms are left alone —
+ * blocking them was pure friction (review round 2, measured). `bash -c`/`sh -c` payloads are
+ * re-entered so a wrapped commit is not a blind spot.
+ */
+export function commitBypassTripwire(command, env = {}, depth = 0) {
+  if (!command || typeof command !== 'string' || depth > 2) return null;
+  for (const seg of lexSegments(command)) {
+    const toks = tokenize(seg);
+    for (const pi of programCandidates(toks)) {
+      const rest = toks.slice(pi);
+      const prog = basename(rest[0]);
+      if (prog === 'bash' || prog === 'sh') {
+        const inner = bashDashCPayload(rest);
+        const nested = inner ? commitBypassTripwire(inner, env, depth + 1) : null;
+        if (nested) return nested;
+        continue;
+      }
+      if (prog !== 'git') continue;
+      const { kind, aliasBody } = gitInvocationInfo(rest);
+      // Inline `GIT_*=…` assignments sit BEFORE the program token, so scan the whole segment's
+      // tokens for a commit invocation — and only for one, which keeps `GIT_DIR=… ls` (no git
+      // program at all) and read-only git calls out of it. An argv-local alias DEFINITION can
+      // also carry the flag (`-c "alias.c=commit --no-verify"`), so its body is walked too.
+      const reason = tripwireArgReason(rest.slice(1), kind)
+        ?? (aliasBody ? tripwireArgReason(tokenize(aliasBody), kind, true) : null)
+        ?? (kind === 'commit' ? tripwireArgReason(toks.slice(0, pi), kind) : null)
+        ?? (kind === 'commit' ? tripwireEnvReason(env) : null);
+      if (reason) return reason;
+    }
+  }
+  return null;
+}
+
 // --- commit FORM parsing (for review-gate effective-content hashing) ---------
 // isGitCommit answers "does this line run a commit?"; parseCommitForm answers
 // "can the review-gate statically hash what this commit will capture, and how?"
@@ -255,8 +540,10 @@ export function isGitCommit(command) {
 //                       captures every tracked change); else -> `git diff --cached`
 //                       (a plain commit captures the index).
 //   verifiable:false => the content cannot be reproduced by a fixed diff in this
-//                       cwd, so the gate fails closed (block on high/critical;
-//                       review-skip is the escape hatch). This covers, deliberately:
+//                       cwd, so the gate fails closed (block on high/critical; the
+//                       audited override — review-skip with reason/approved-by/
+//                       `diff-hash: UNVERIFIABLE` — is the escape hatch). This
+//                       covers, deliberately:
 //                         • pathspec commits (`git commit foo.ts`) — the path set is
 //                           shell-fragile (escapes, globs) and cwd-relative;
 //                         • --amend / --include(-i) / --interactive(-p) /
@@ -283,12 +570,19 @@ export function isGitCommit(command) {
 //
 // Known NON-ADVERSARIAL limitations (consistent with isGitCommit's stated model —
 // these are wrong-tree hashes or detection misses, not honored here):
-//   • a `cd`/`pushd` to a DIFFERENT repo before the commit (`cd ../other && git commit`)
-//     — same-repo cd is safe and common, so blanket-blocking it is pure friction;
-//   • `env -C`/`--chdir` cwd changes, and a pathspec quoted to look like a redirection
-//     (`git commit -- '>f.ts'`) — tokenize() discards the quote, an absurd filename;
+//   • a `cd`/`pushd`/`popd` sharing a line with a commit is not attributed to a repo here at
+//     all: this parser answers only "which enforcement surface could this call skip?", and the
+//     repo question moved to the hook, which fires in the real target repo whatever the cwd
+//     dance was. Standalone same-repo cd lines are likewise untouched;
+//   • a pathspec quoted to look like a redirection (`git commit -- '>f.ts'`) —
+//     tokenize() discards the quote, an absurd filename;
 //   • forms isGitCommit itself does not detect ($(…) / `env -S` / leading `>out …` /
 //     process substitution) bypass this gate upstream — see isGitCommit's header.
+//
+// Hook mode does not use this parser at all: .githooks/pre-commit hands the gates an
+// explicit form (staged index, or `HEAD^ --cached` for an amend), because at index-commit
+// time there is no command string to classify. parseCommitForm remains for the gates'
+// standalone/debug path and for callers that only have a command line.
 
 // git commit options that consume a SEPARATE value token (long form). Excludes
 // --gpg-sign / -S: their <keyid> is optional and attaches only with `=`, so a
@@ -304,11 +598,16 @@ const COMMIT_UNVERIFIABLE_LONG = ['--amend', '--include', '--interactive', '--pa
 const COMMIT_SHORT_VALUE = new Set(['m', 'F', 'C', 'c', 't']);
 // git global options that redirect to another repo/worktree/dir: a cwd diff would
 // hash the wrong tree, so any commit carrying one is unverifiable.
-const GIT_REPO_REDIRECT_OPT = new Set(['-C', '--git-dir', '--work-tree', '--namespace']);
+const GIT_REPO_REDIRECT_OPT = new Set(['-C', '--git-dir', '--work-tree', '--namespace', '--bare']);
 // Same, via the environment: a leading `GIT_DIR=… git commit` retargets the repo.
-const GIT_REPO_REDIRECT_ENV = /^GIT_(DIR|WORK_TREE|INDEX_FILE|NAMESPACE|COMMON_DIR)=/;
-// `-c <key>` / `--config-env` keys that move the repo root/worktree/index.
-const GIT_REPO_REDIRECT_CONFIG = /^core\.(worktree|bare|git-?dir|common-?dir)\b/i;
+// GIT_CONFIG* covers `GIT_CONFIG_COUNT/KEY_n/VALUE_n` (injects e.g. core.worktree) and
+// GIT_CONFIG_GLOBAL/SYSTEM redirection — over-matching harmless GIT_CONFIG_NOSYSTEM only
+// errs toward fail-closed.
+const GIT_REPO_REDIRECT_ENV = /^GIT_(DIR|WORK_TREE|INDEX_FILE|NAMESPACE|COMMON_DIR|CONFIG\w*)\+?=/;
+// `-c <key>` / `--config-env` keys that move the repo root/worktree/index — directly
+// (core.*) or via config-file indirection (include.path / includeIf.* can inject
+// core.worktree from an arbitrary file).
+const GIT_REPO_REDIRECT_CONFIG = /^(core\.(worktree|bare|git-?dir|common-?dir)|include\.|includeif\.)/i;
 
 // True if the command contains an unquoted `&` that is part of a shell redirection
 // (`2>&1`, `>&2`, `<&3`, `&>file`): the `&` is adjacent to a `<`/`>`. The reused
@@ -342,8 +641,10 @@ const isUnverifiableLong = (name) =>
 // `git commit -F - <<'MSG'` would read `<<MSG` as a pathspec and mis-hash. Returns
 // null (not a redirection) or { standalone } where standalone means the operator has
 // no glued operand and the NEXT token is its target.
+
+
 function redirToken(t) {
-  const m = /^(?:\d+|&)?(?:>>|>\||>&|<<-|<<<|<<|<>|<|>)/.exec(t);
+  const m = /^(?:\d+|&|\{[A-Za-z_][A-Za-z0-9_]*\})?(?:>>|>\||>&|<<-|<<<|<<|<>|<|>)/.exec(t); // {fd}>x varfd form included
   if (!m) return null;
   return { standalone: t.length === m[0].length };
 }
@@ -353,33 +654,44 @@ function redirToken(t) {
 // `commit` in a direct `git … commit`).
 function commitSegInfo(seg) {
   const toks = tokenize(seg);
-  const pi = programIndex(toks);
-  if (pi < 0) return null;
-  // A repo-redirecting env assignment before the program (`GIT_DIR=… git commit`,
-  // also `env GIT_DIR=… git commit`) makes the cwd diff hash the wrong tree.
-  if (toks.slice(0, pi).some((t) => GIT_REPO_REDIRECT_ENV.test(t))) {
-    return segmentIsGitCommit(seg, 0) ? { unverifiable: true } : null;
+  const cands = programCandidates(toks);
+  if (cands.length === 0) return null;
+  let found = null, hits = 0;
+  for (const pi of cands) {
+    // A repo-redirecting env assignment or xargs before the program makes the cwd diff
+    // hash the wrong tree / unseen argv.
+    if (toks.slice(0, pi).some((t) => GIT_REPO_REDIRECT_ENV.test(t) || basename(t) === 'xargs')) {
+      return segmentIsGitCommit(seg, 0) ? { unverifiable: true } : null;
+    }
+    const rest = toks.slice(pi);
+    if (basename(rest[0]) !== 'git') continue;           // bash -c handled by the fallback below
+    let i = 1, redirect = false, subst = false;
+    while (i < rest.length) {
+      const t = rest[i];
+      if (!t.startsWith('-')) break;
+      if (GIT_TERMINAL_OPT.has(t) || t.startsWith('--list-cmds')) { i = -1; break; }
+      const nameOnly = t.includes('=') ? t.slice(0, t.indexOf('=')) : t;
+      if (GIT_REPO_REDIRECT_OPT.has(nameOnly)) redirect = true;
+      if (nameOnly === '--config-env') redirect = true;                 // -> alternate config
+      if (t === '-c' && GIT_REPO_REDIRECT_CONFIG.test(rest[i + 1] || '')) redirect = true;
+      if (GIT_OPT_WITH_ARG.has(t)) {
+        const v = rest[i + 1] ?? '';
+        if (substShredValue(v)) subst = true;            // swallowed substitution hides the subcommand
+        i += 2; continue;
+      }
+      i += 1;
+    }
+    if (i < 0) continue;                                 // terminal option: prints and exits
+    let hit = rest[i] === 'commit';
+    if (!hit && subst) { for (let k = i; k < rest.length; k++) if (rest[k] === 'commit') { hit = true; redirect = true; break; } }
+    if (!hit) continue;
+    hits += 1;
+    found = (redirect || subst) ? { unverifiable: true } : { args: rest.slice(i + 1) };
   }
-  const rest = toks.slice(pi);
-  if (basename(rest[0]) !== 'git') {
-    // A non-git program here may still wrap a commit (e.g. bash -c "git commit").
-    return segmentIsGitCommit(seg, 0) ? { unverifiable: true } : null;
-  }
-  let i = 1, redirect = false;                        // skip git global options
-  while (i < rest.length) {
-    const t = rest[i];
-    if (!t.startsWith('-')) break;
-    if (GIT_TERMINAL_OPT.has(t) || t.startsWith('--list-cmds')) return null;
-    const nameOnly = t.includes('=') ? t.slice(0, t.indexOf('=')) : t;
-    if (GIT_REPO_REDIRECT_OPT.has(nameOnly)) redirect = true;
-    if (nameOnly === '--config-env') redirect = true;                 // -> alternate config
-    if (t === '-c' && GIT_REPO_REDIRECT_CONFIG.test(rest[i + 1] || '')) redirect = true;
-    if (GIT_OPT_WITH_ARG.has(t)) { i += 2; continue; }
-    i += 1;
-  }
-  if (rest[i] !== 'commit') return null;
-  if (redirect) return { unverifiable: true };
-  return { args: rest.slice(i + 1) };
+  if (hits > 1) return { unverifiable: true };           // ambiguous program position
+  if (hits === 1) return found;
+  // No direct parse hit: a wrapper/bash -c may still hide a commit (detection-only).
+  return segmentIsGitCommit(seg, 0) ? { unverifiable: true } : null;
 }
 
 // Classify the post-`commit` argument tokens. Any pathspec, interactive/include
@@ -478,3 +790,103 @@ export function isWipCommit(command) {
   }
   return sawCommit;
 }
+
+// --- commit target repo (index.ts HEAD snapshot; #22 / #48-6) ------------------
+// The directory whose HEAD a `git commit` in `command` would move — so the extension can
+// snapshot HEAD before the call and tell a landed commit from a gate-blocked one (HEAD
+// unchanged), in the repo the commit actually targets (`git -C other commit` moved the
+// OTHER repo's HEAD, not the session's — issue #22). Static and best-effort:
+//   `git -C <dir> commit`    -> <dir>, chained -C resolved relative to the previous (like git)
+//   plain `git commit`       -> baseDir (the bash tool's cwd input, else the session cwd)
+//   `bash -c "git … commit"` -> recursed with the same base
+// Returns null when the target cannot be trusted — a `cd`/`pushd`/`eval` token anywhere, a -C
+// value the shell would still expand (`~`, `$VAR`, `$(…)`, glob), `env -C`/`--chdir`,
+// --git-dir/--work-tree/GIT_DIR= retargeting, or two commit segments naming different repos.
+// Callers treat null as "unknown" and fall back to the exit code rather than guessing a HEAD.
+// A token that moves the cwd or re-executes text makes the commit's target unknowable
+// statically. `cd`/`pushd`/`popd`/`eval`/`source` are matched as ANY token so `command cd x`,
+// `builtin source e.sh`, `eval "cd x"` are caught; `.` (the source builtin) only at the program
+// position or right after `command`/`builtin` — it is also the everyday pathspec in `git add .`.
+// A quoted message stays ONE token, so `-m "cd x"` does not over-match; an unquoted over-match
+// only costs the exit-code fallback, never a wrong repo.
+const CWD_SHIFTERS = new Set(['cd', 'pushd', 'popd', 'eval', 'source']);
+const BUILTIN_RUNNERS = new Set(['command', 'builtin']);
+// A wrapper's own chdir option — GNU env `-C dir` / `-Cdir` / `--chdir=dir` and its unambiguous
+// abbreviations (`--ch`, `--chd`, …), sudo `-D dir` — moves the program's cwd.
+const WRAPPER_CHDIR = /^(-C|-D|--ch)/;
+// A -C value the shell would still expand — `~`, `$VAR`, `$(…)`/backticks (quoted forms survive
+// tokenize() with their `$`), globs, brace expansion — is not the literal directory git will see.
+const UNEXPANDED = /[$`*?[{]|^~/;
+// Change directory the way git's chdir does: component by component, following symlinks at
+// each step, so `-C link/..` is the PARENT OF THE LINK TARGET (lexical `resolve()` would
+// collapse `link/..` to the link's own parent first — and so does Node's JS `realpathSync`,
+// which normalizes before walking; only the libc-backed `.native` follows the link first). A
+// component that does not exist stays lexical — readHead fails there anyway.
+function physical(p) {
+  try { return realpathSync.native(p); } catch { return p; }
+}
+function chdir(from, v) {
+  let cur = v.startsWith('/') ? '/' : physical(from);
+  for (const part of v.split('/')) {
+    if (part === '' || part === '.') continue;
+    cur = part === '..' ? dirname(cur) : physical(join(cur, part));
+  }
+  return cur;
+}
+
+function scanCommitTarget(command, baseDir, depth) {
+  if (depth > MAX_DEPTH) return { unknown: true };
+  let dir = null;
+  const merge = (d) => { if (dir !== null && dir !== d) return false; dir = d; return true; };
+  for (const seg of lexSegments(command)) {
+    const toks = tokenize(seg);
+    if (toks.length === 0) continue;
+    if (toks.some((t, i) => CWD_SHIFTERS.has(basename(t)) || GIT_REPO_REDIRECT_ENV.test(t)
+      || (t === '.' && i > 0 && BUILTIN_RUNNERS.has(toks[i - 1])))) return { unknown: true };
+    const cands = programCandidates(toks);
+    if (cands.length === 0) continue;
+    if (toks[cands[0]] === '.') return { unknown: true };
+    for (const pi of cands) {
+      // Anything before THIS program position is wrapper territory (`sudo -u git env -C /o git …`).
+      if (toks.slice(0, pi).some((t) => WRAPPER_CHDIR.test(t))) return { unknown: true };
+      const rest = toks.slice(pi);
+      const b = basename(rest[0]);
+      if (b === 'bash' || b === 'sh') {
+        const inner = bashDashCPayload(rest);
+        if (inner === null) continue;
+        const r = scanCommitTarget(inner, baseDir, depth + 1);
+        if (r === null) continue;
+        if (r.unknown || !merge(r.dir)) return { unknown: true };
+        continue;
+      }
+      if (b !== 'git') continue;
+      let i = 1, target = physical(baseDir), terminal = false;
+      while (i < rest.length) {
+        const t = rest[i];
+        if (!t.startsWith('-')) break;
+        if (GIT_TERMINAL_OPT.has(t) || t.startsWith('--list-cmds')) { terminal = true; break; }
+        const nameOnly = t.includes('=') ? t.slice(0, t.indexOf('=')) : t;
+        if (t === '-C') {
+          const v = rest[i + 1];
+          if (v === undefined || UNEXPANDED.test(v)) return { unknown: true };
+          target = chdir(target, v);
+          i += 2; continue;
+        }
+        if (GIT_REPO_REDIRECT_OPT.has(nameOnly) || nameOnly === '--config-env') return { unknown: true };
+        if (t === '-c' && GIT_REPO_REDIRECT_CONFIG.test(rest[i + 1] || '')) return { unknown: true };
+        if (GIT_OPT_WITH_ARG.has(t)) { if (substShredValue(rest[i + 1] ?? '')) return { unknown: true }; i += 2; continue; }
+        i += 1;
+      }
+      if (terminal || rest[i] !== 'commit') continue;
+      if (!merge(target)) return { unknown: true };
+    }
+  }
+  return dir === null ? null : { dir };
+}
+
+export function commitTargetDir(command, baseDir) {
+  if (!command || typeof command !== 'string' || !baseDir) return null;
+  const r = scanCommitTarget(command, baseDir, 0);
+  return r && !r.unknown ? r.dir : null;
+}
+

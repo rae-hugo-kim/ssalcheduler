@@ -16,7 +16,7 @@ description: Generate a self-contained interactive HTML mockup with sliders/knob
 
 아래 규칙은 *작성·리뷰 시점*의 컨벤션이다. 게이트 차원의 강제는 없음 —
 룰 위반은 PR 리뷰에서 잡는다. gate-level
-enforcement는 `rules/doc_standards.md` 백로그 항목으로 남김.
+enforcement는 `.omp/rules/harness-doc_standards.md` 백로그 항목으로 남김.
 
 | Rule | 위반 시 (리뷰 시점 차단) |
 |------|------------------------|
@@ -71,7 +71,7 @@ artifacts/design/2026-05-22-payment-button.html 생성. 브라우저로 열어 �
 
 - 위치: `artifacts/design/<YYYY-MM-DD>-<topic>.html`
 - gitignore 대상 (1회성 사람용 산출물)
-- docs SST 미포함 (HTML은 `artifacts/` 격리 — `rules/doc_standards.md` R4)
+- docs SST 미포함 (HTML은 `artifacts/` 격리 — `.omp/rules/harness-doc_standards.md` R4)
 
 ## Examples
 
@@ -109,4 +109,4 @@ artifacts/design/2026-05-22-payment-button.html 생성. 브라우저로 열어 �
 
 - `docs/harness/seed.yaml` AC3 — 본 스킬의 정의 원본
 - `artifacts/README.md` — 출력 디렉터리 정책
-- `rules/doc_standards.md` R4 — 1회성 HTML 격리 정책
+- `.omp/rules/harness-doc_standards.md` R4 — 1회성 HTML 격리 정책

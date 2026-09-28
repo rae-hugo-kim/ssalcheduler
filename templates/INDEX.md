@@ -8,6 +8,7 @@
 - Eval definition: [`eval_definition.md`](eval_definition.md)
 - Eval report: [`eval_report.md`](eval_report.md)
 - Session retro: [`session_retro.md`](session_retro.md)
+- Scratchboard (지시 문서를 사이클 큐로 운영): [`scratchboard.md`](scratchboard.md)
+- Design contract (`design/DESIGN.md` 시작 템플릿 — 섹션마다 무엇을/왜 + 예시 값): [`DESIGN.md`](DESIGN.md)
 - gh-loop runtime workflow (autonomy option A): [`github-workflows/gh-loop.yml`](github-workflows/gh-loop.yml) + [setup](github-workflows/README.md)
-
-
+- Persona (omp `personality` 프리셋 대체 — `bootstrap`이 `~/.omp/agent/PERSONALITY.md`로 복사, 부재 시만): [`PERSONALITY.md`](PERSONALITY.md)

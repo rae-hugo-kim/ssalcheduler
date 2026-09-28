@@ -1,0 +1,22 @@
+# Project Glossary Template
+# Copy to docs/glossary.yaml and fill in project-specific terms.
+#
+# Purpose:
+#   - Align terminology across agents, hooks, documents, and humans
+#   - Prevent ontological drift (same concept, different names)
+#   - Machine-parseable for future hook/agent integration
+#
+# Format:
+#   Each entry has: term, aliases (optional), meaning, context (optional)
+#   - term: canonical name (use this in code, docs, and seeds)
+#   - aliases: alternative names that should resolve to this term
+#   - meaning: one-line definition
+#   - context: where/when this term matters (optional)
+
+version: 1
+
+terms: []
+  # - term: ""
+  #   aliases: []
+  #   meaning: ""
+  #   context: ""

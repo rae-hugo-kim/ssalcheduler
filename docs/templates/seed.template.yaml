@@ -1,0 +1,31 @@
+version: 1
+status: draft
+
+goal: >
+  <한 문단으로 작업 목표를 적는다>
+
+constraints:
+  - <반드시 지켜야 할 조건 1>
+  - <반드시 지켜야 할 조건 2>
+
+acceptance_criteria:
+  - <완료 여부를 테스트 가능한 문장으로 적는다>
+  - <AC 2>
+
+out_of_scope:
+  - <이번 작업에서 하지 않는 것 1>
+  - <이번 작업에서 하지 않는 것 2>
+
+assumptions:
+  - <현재 전제하고 있는 것 1>
+  - <현재 전제하고 있는 것 2>
+
+risks:
+  - <실패/회귀/검증 사각지대 위험 1>
+  - <위험 2>
+
+references:
+  - path: docs/harness/kickoff-summary.md
+    reason: <왜 이 파일을 참조하는지>
+  - path: <관련 파일 경로>
+    reason: <참조 이유>

@@ -23,7 +23,7 @@
 
 ## Patterns learned
 
-<!-- Atomic learnings from this change. See rules/learning_policy.md for criteria. -->
+<!-- Atomic learnings from this change. See .omp/rules/harness-learning_policy.md for criteria. -->
 
 - [domain-tag] Learning:
 - Evidence:

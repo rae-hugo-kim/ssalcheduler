@@ -4,7 +4,7 @@
 // Risk-aware: docs-only changes skip test requirement
 // Exit 0 = allow, Exit 2 = block
 
-import { readFileSync, existsSync, appendFileSync, mkdirSync, unlinkSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { assessRisk } from './risk-assess.mjs';
 import { isGitCommit, parseCommitForm } from './git-commit-detect.mjs';
@@ -36,7 +36,10 @@ log('Hook started');
 const command = data?.tool_input?.command || '';
 log(`Command: ${command}`);
 
-if (!isGitCommit(command)) {
+// Hook mode (AC6): spawned by the pre-commit dispatcher — no command string; the hook
+// firing is the commit, and the synthetic form pins risk to the staged index (--cached).
+const isHookMode = data?.mode === 'hook';
+if (!isHookMode && !isGitCommit(command)) {
   log('Not a git commit, allowing');
   process.exit(0);
 }
@@ -46,7 +49,10 @@ log('Git commit detected, checking backpressure status');
 // Scope risk to what the commit actually captures (staged-only for a plain commit,
 // all tracked for -a), so unrelated unstaged edits don't force test-verification on a
 // commit that won't include them. Unverifiable forms fall back to the conservative union.
-const risk = assessRisk(cwd, parseCommitForm(command));
+const form = isHookMode
+  ? { all: false, verifiable: true }
+  : parseCommitForm(command);
+const risk = assessRisk(cwd, form);
 log(`Risk: ${risk.level} (${risk.reason})`);
 
 if (risk.level === 'low' || risk.level === 'none') {
@@ -56,8 +62,17 @@ if (risk.level === 'low' || risk.level === 'none') {
 
 const skipFile = join(cwd, 'docs', 'harness', 'backpressure-skip');
 if (existsSync(skipFile)) {
-  log('backpressure-skip flag found, allowing');
-  unlinkSync(skipFile);
+  if (isHookMode) {
+    // Deferred consumption (test-attack B-4): the verdict may precede a commit that never
+    // lands. Leave the flag; the post-commit backstop executes the intent.
+    const pendDir = join(cwd, '.omp', 'harness-state', 'pending-consume');
+    mkdirSync(pendDir, { recursive: true });
+    writeFileSync(join(pendDir, 'unlink-backpressure-skip'), 'docs/harness/backpressure-skip\n');
+    log('backpressure-skip flag found, allowing (consumption deferred to post-commit)');
+  } else {
+    log('backpressure-skip flag found, allowing');
+    unlinkSync(skipFile);
+  }
   process.exit(0);
 }
 
@@ -67,7 +82,7 @@ if (existsSync(skipFile)) {
 if (risk.level === 'unknown') {
   log('Risk assessment failed (git error), blocking conservatively');
   console.error('HARNESS BLOCK: Could not assess change risk (git error).');
-  console.error('Run build/test/lint and ensure they pass, or create docs/harness/backpressure-skip to override.');
+  console.error('Run build/test/lint and ensure they pass (a project-specific runner can be registered in docs/harness/verify-commands.json), or create docs/harness/backpressure-skip to override.');
   process.exit(2);
 }
 
@@ -77,7 +92,7 @@ if (!existsSync(statusFile)) {
   if (risk.level === 'critical' || risk.level === 'high') {
     log('No status file + high risk, blocking');
     console.error('HARNESS BLOCK: No build/test verification for high-risk changes.');
-    console.error('Run tests first, or create docs/harness/backpressure-skip to override.');
+    console.error('Run tests first (a project-specific runner can be registered in docs/harness/verify-commands.json — see .omp/rules/harness-harness_integration_contract.md §3), or create docs/harness/backpressure-skip to override.');
     process.exit(2);
   }
   log('No status file + medium risk, warning');
@@ -102,7 +117,7 @@ if (status === 'UNKNOWN') {
   if (risk.level === 'critical' || risk.level === 'high') {
     log('Status UNKNOWN + high risk, blocking');
     console.error('HARNESS BLOCK: No build/test verification in this session for high-risk changes.');
-    console.error('Run build/test/lint and ensure they pass, or create docs/harness/backpressure-skip to override.');
+    console.error('Run build/test/lint and ensure they pass (a project-specific runner can be registered in docs/harness/verify-commands.json), or create docs/harness/backpressure-skip to override.');
     process.exit(2);
   }
   log(`Status UNKNOWN + ${risk.level} risk, warning`);

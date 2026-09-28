@@ -8,7 +8,7 @@ Inspired by [Andrej Karpathy's observations](https://x.com/karpathy/status/20158
 
 ## 1. Think Before Coding
 
-> → Related rule: [`rules/anti_hallucination.md`](rules/anti_hallucination.md)
+> → Related rule: [`.omp/rules/harness-anti_hallucination.md`](.omp/rules/harness-anti_hallucination.md)
 
 ### Example: Hidden Assumptions
 
@@ -43,7 +43,7 @@ What's your preference?
 
 ## 2. Simplicity First
 
-> → Related rule: [`rules/change_control.md`](rules/change_control.md)
+> → Related rule: [`.omp/rules/harness-change_control.md`](.omp/rules/harness-change_control.md)
 
 ### Example: Over-Abstraction
 
@@ -88,7 +88,7 @@ Add complexity later when you actually need multiple discount types.
 
 ## 3. Surgical Changes
 
-> → Related rule: [`rules/change_control.md`](rules/change_control.md)
+> → Related rule: [`.omp/rules/harness-change_control.md`](.omp/rules/harness-change_control.md)
 
 ### Example: Drive-by Refactoring
 
@@ -137,7 +137,7 @@ The test: Every changed line should trace directly to the user's request.
 
 ## 4. Goal-Driven Execution
 
-> → Related rules: [`rules/verification_tests_and_evals.md`](rules/verification_tests_and_evals.md), [`rules/tdd_policy.md`](rules/tdd_policy.md)
+> → Related rules: [`.omp/rules/harness-verification_tests_and_evals.md`](.omp/rules/harness-verification_tests_and_evals.md), [`.omp/rules/harness-tdd_policy.md`](.omp/rules/harness-tdd_policy.md)
 
 ### Example: Vague vs. Verifiable
 

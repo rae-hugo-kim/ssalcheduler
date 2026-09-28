@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# post-merge: NON-BLOCKING observation of merge auto-commits. Always exits 0.
+#
+# Measured (git 2.43.0, test-attack A-1): an automatic merge commit fires NEITHER
+# pre-commit NOR post-commit — post-merge is the only hook that observes it. This is
+# the deliberate design (seed 20260729-132948-e510): merged contents were gated at
+# their origin commits, so merges are not blocked; conflict-resolution merges finish
+# through `git commit`, which DOES run the pre-commit gates.
+#
+# Fast-forward merges create no commit: stay silent unless HEAD is a merge commit.
+# Shipped via harness-sync; node-free on purpose.
+set -u
+
+# git passes $1=1 for a squash merge, which stages changes WITHOUT creating a commit — the
+# advisory would be about a commit that does not exist (review round 4).
+[ "${1:-0}" = "1" ] && exit 0
+
+# A merge COMMIT was just created only when HEAD has a second parent AND this merge was not a
+# fast-forward. Parent comparison is not enough: fast-forwarding from a merge commit's own first
+# parent onto that merge leaves ORIG_HEAD == HEAD^1 and produced a false advisory (rounds 1–2).
+# git's reflog says which it was; match the SUFFIX after git's own ": " separator so a branch
+# merely NAMED "Fast-forward" cannot silence the advisory (round 3, L1). An empty reflog
+# (core.logAllRefUpdates=false) falls through to the advisory — noise, never silence.
+git rev-parse -q --verify 'HEAD^2' >/dev/null 2>&1 || exit 0
+case "$(git reflog -1 --format=%gs 2>/dev/null || true)" in
+  *": Fast-forward") exit 0 ;;
+esac
+
+{
+  echo "HARNESS ADVISORY: merge commit created without pre-commit gating (by design:"
+  echo "  merged contents were gated at their origin commits; conflict-resolution merges"
+  echo "  run the gates through git commit)."
+} >&2
+exit 0

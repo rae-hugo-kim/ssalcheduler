@@ -45,7 +45,10 @@ export function fromBreadcrumb(entries) {
   const list = Array.isArray(entries) ? entries : [];
   const findings = [];
   for (const e of list) {
-    if (!e || e.result !== 'FAIL') continue;
+    if (!e) continue;
+    // A commit that did not land is recorded as FAIL (non-zero exit) or BLOCKED (the target repo
+    // recorded no commit — gate block, masked exit; #48-6): both are a failed commit here.
+    if (e.result !== 'FAIL' && !(e.kind === 'commit' && e.result === 'BLOCKED')) continue;
     if (e.kind === 'test') {
       const type = String(e.type || 'test').trim().toLowerCase() || 'test';
       findings.push({
@@ -59,7 +62,7 @@ export function fromBreadcrumb(entries) {
       findings.push({
         source: 'breadcrumb',
         title: `Commit failed: ${cmd}`,
-        body: `A commit recorded FAIL in the session breadcrumb${e.ts ? ` (${e.ts})` : ''}: ${cmd}`,
+        body: `A commit recorded ${e.result} in the session breadcrumb${e.ts ? ` (${e.ts})` : ''}: ${cmd}`,
         labels: ['failing-check'],
       });
     }

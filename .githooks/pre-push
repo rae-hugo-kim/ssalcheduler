@@ -23,7 +23,7 @@ if [[ -n "$tracked_archives" ]]; then
   {
     echo "pre-push blocked: local archive files are tracked in git:"
     echo "$tracked_archives" | head -10 | sed 's/^/  - /'
-    echo "Session narratives must not reach a remote (policy: rules/doc_standards.md)."
+    echo "Session narratives must not reach a remote (policy: .omp/rules/harness-doc_standards.md)."
     echo "Clean up: git rm -r --cached docs/sum docs/reviews docs/brainstorming"
     echo "then add them to .gitignore. Narratives are backed up in the private sum-vault."
     echo "Emergency bypass: git push --no-verify"

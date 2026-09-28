@@ -200,7 +200,7 @@ No coding. Only information gathering + state file saving to `docs/harness/`.
 2. 엣지 케이스는 무엇인가?
 3. 실패 시나리오는 어떻게 처리해야 하는가?
 
-**Gate**: 최소 3개의 구체적인 수락 기준이 정의될 때까지
+**Gate**: 최소 3개의 구체적인 수락 기준이 정의될 때까지. **각 기준은 커밋 시점에 판정 가능해야 한다** — "PR을 연다", "태그를 푸시한다", "머지한다"처럼 그 커밋 *뒤에* 참이 되는 항목은 AC가 아니라 후속 절차로 적는다(`.omp/rules/harness-cycle_definition.md`; acceptance-gate와 순환해 거짓 체크나 WIP 우회를 유도한다).
 
 **Output**:
 ```markdown
@@ -260,6 +260,7 @@ echo "$(date -Iseconds)" > docs/harness/kickoff-done
 - `assumptions`: Phase 1 Context 중 증거 없이 전제한 항목
 - `risks`: Phase 1 Risks + Phase 3 Edge Cases
 - `references`: kickoff-summary.md + 관련 파일 경로 + (doc-ingest 시 원본 상위 문서 경로) + (Phase -1에서 채택한 brainstorm 캡처 경로, 있을 때만)
+- `estimate` (선택, `.omp/rules/harness-cycle_definition.md` "예상 레코드"): 인터뷰가 끝난 시점의 **예측** — `risk` (low|medium|high|critical, risk-assess taxonomy), `files` (정수), `depth` (low|high, 추론 깊이 — risk와 독립 축), `model`, `effort`. Step 6에서 `.omp/harness-state/cycle-estimate`로 파생되어 커밋 착지 시 실측과 대조된다. 판정에 관여하지 않는다.
 
 **per-AC `source:` 컨벤션** (AC3 — 출처추적 / coverage 역매핑의 기계적 근거):
 
@@ -287,7 +288,7 @@ echo "$(date -Iseconds)" > docs/harness/kickoff-done
 
 #### Step 3.5: Plan Attack Gate (적대적 검증)
 
-seed.yaml 생성 후 자동 실행. 정책: [`rules/adversarial_review.md`](../../../rules/adversarial_review.md)
+seed.yaml 생성 후 자동 실행. 정책: [`.omp/rules/harness-adversarial_review.md`](../../../.omp/rules/harness-adversarial_review.md)
 
 ```
 1. audit.jsonl에서 현재 task_id의 adversarial_plan_attack 이벤트 수를 세어 run_count 결정
@@ -373,6 +374,8 @@ seed.yaml 내용을 기반으로 **5개 차원**(clarity 4축 + `coverage`)을 �
 ```
 
 > **참고**: current-scope.md는 기존 훅 호환성을 위해 유지한다. seed.yaml이 권위 있는 원본이며, current-scope.md는 파생물이다.
+
+**예상 레코드 파생** (seed에 `estimate`가 있을 때): `.omp/harness-state/cycle-estimate`에 한 줄로 쓴다 — `["omp-estimate/v1", <risk>, <files>, <depth>, <model>, <effort>, "<ts>"]` (`ts`는 존 지정자가 있는 ISO 8601, `date -u +%Y-%m-%dT%H:%M:%SZ`). `current-scope.md`와 같은 관계(seed가 원본, 레코드는 파생물). 채팅 인테이크 경로(cycle intake)에서는 seed 없이 이 레코드만 쓴다.
 
 #### Step 7: audit.jsonl 기록
 

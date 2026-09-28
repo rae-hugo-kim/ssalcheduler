@@ -32,9 +32,11 @@ META_FILE="$REPO_ROOT/.omp/extensions/harness/harness-meta.json"
 # should produce a new version. Entries ending in "/" are directory prefixes;
 # others are exact file paths. (Excludes docs-drift — not synced.)
 HARNESS_PATHS=(
-  "rules/"
   "checklists/"
   "templates/"
+  # aligned with harness-sync.sh: harness rulebook files in consumer-space .omp/rules sync by
+  # prefix glob (ADR 002 §1) — dir exact, basename glob, never across "/".
+  ".omp/rules/harness-*.md"
   "AGENTS.md"
   "INDEX.md"
   "EXAMPLES.md"
@@ -46,14 +48,24 @@ HARNESS_PATHS=(
   "scripts/test-harness-audit.sh"
   ".omp/skills/"
   ".omp/agents/"
+  # aligned with harness-sync.sh: docs/rules contracts sync as individual files;
+  # the dir prefix here just makes ANY contract change trigger a version bump.
+  "docs/rules/"
+  "docs/prompt-writing-handbook.md"
+  # kickoff/init 계약 템플릿·체크리스트 — harness-sync.sh에 개별 파일로 등재 (#35-7).
+  "docs/templates/"
+  "docs/checklists/"
 )
 
-# Literal path match (no regex): exact for file entries, prefix for "dir/" entries.
+# Literal path match (no regex): exact for file entries, prefix for "dir/" entries, and
+# for glob entries the directory must match exactly while only the basename is a pattern.
 is_harness_path() {
   local f="$1" p
   for p in "${HARNESS_PATHS[@]}"; do
     if [[ "$p" == */ ]]; then
       [[ "$f" == "$p"* ]] && return 0
+    elif [[ "$p" == *[\*\?]* ]]; then
+      [[ "${f%/*}" == "${p%/*}" && "${f##*/}" == ${p##*/} ]] && return 0
     else
       [[ "$f" == "$p" ]] && return 0
     fi

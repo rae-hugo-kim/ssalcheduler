@@ -1,11 +1,151 @@
 #!/usr/bin/env bash
-# post-commit: intentionally a NO-OP.
+# post-commit: NON-BLOCKING backstop + deferred one-shot consumption. Always exits 0.
 #
-# Harness version bumps used to fire here on every commit, which produced one
-# version per commit (churn). Bumping is now DELIBERATE: after a harness change
-# lands on main, run `scripts/harness-version-bump.sh` once (see its header).
+# Two jobs (seed 20260729-132948-e510 AC1/AC6):
+#   1. Attempt-identity token protocol. The pre-commit dispatcher writes
+#      .omp/harness-state/gated-commit-token holding a `v2` format marker, the TREE OBJECT the
+#      gates approved (`git write-tree` on the index git was about to commit), and the HEAD this
+#      attempt would sit on. This hook consumes the token only when the landed commit has that
+#      exact tree AND that exact parent, and then executes the consumption intents the verdict
+#      deferred (review-skip / backpressure-skip unlink, audit append, wip flag). BOTH axes are
+#      required: the tree keeps a LEFTOVER token from laundering a later ungated commit, and the
+#      strict parent keeps a sibling commit — an `--amend`, a cherry-pick onto the same base —
+#      from consuming an approval for content that never landed (which wrote audit lines for
+#      diffs that did not exist; measured in review rounds 2-3). Deferral itself is what keeps a
+#      one-shot override alive when a commit aborts after the verdict — no commit, no
+#      post-commit, nothing consumed.
+#   2. Ungated-commit advisory: no token, or a token that does not match this commit,
+#      means the gates never approved THIS content (--no-verify, cherry-pick, revert,
+#      rebase replay). Advisory only — re-applied commits were gated at their origin.
+#      Merge auto-commits fire neither pre-commit nor post-commit; .githooks/post-merge
+#      observes those.
 #
-# This stub is kept (and synced) so that `harness-check` / `harness-sync`
-# overwrites any consumer's older auto-bump post-commit with this no-op, stopping
-# the churn in already-registered repos too.
+# node-free on purpose: the backstop must observe even where node is absent.
+# (This file also retains its original sync role: overwriting consumers' legacy
+# auto-version-bump post-commit — bump deliberately via harness-version-bump.sh.)
+set -u
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+[ -z "$repo_root" ] && exit 0
+state="$repo_root/.omp/harness-state"
+token="$state/gated-commit-token"
+pend="$state/pending-consume"
+
+advise() {
+  {
+    echo "HARNESS ADVISORY: this commit's content was NOT approved by the pre-commit gates"
+    echo "  ($1). Re-applied commits (cherry-pick/revert/rebase) were gated at their origin;"
+    echo "  newly written changes that bypassed the gates should be gated before pushing —"
+    echo "  stage them into a fresh commit that runs the gates (an --amend does NOT re-judge"
+    echo "  content already in the commit)."
+  } >&2
+}
+
+if [ ! -f "$token" ]; then
+  # Nothing approved this commit. Leave any deferred intents untouched: they belong to an
+  # attempt that has not landed yet (the dispatcher clears them when it next runs).
+  advise "no gate verdict token"
+  exit 0
+fi
+
+token_version="$(sed -n 1p "$token" | tr -d '\r\n')"
+approved_tree="$(sed -n 2p "$token" | tr -d '\r\n')"
+approved_head="$(sed -n 3p "$token" | tr -d '\r\n')"
+landed_tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null || true)"
+landed_parent="$(git rev-parse -q --verify 'HEAD^' 2>/dev/null || true)"
+rm -f "$token"
+if [ -f "$token" ]; then
+  echo "HARNESS WARNING: could not remove $token; the next commit may consume a stale verdict." >&2
+fi
+
+# The format marker keeps an older one-line token from parsing as a valid approval (its missing
+# fields would read as empty and match a root commit — review round 3, L7).
+if [ "$token_version" != "v2" ]; then
+  advise "the verdict token is not in the expected format"
+  exit 0
+fi
+# BOTH axes must agree, and the parent axis is STRICT. The tree proves the content is what the
+# gates judged; the parent proves this is the SAME attempt. Accepting "parent == approved
+# commit's parent" to be amend-friendly also accepted every sibling commit on that base, so an
+# `--amend`, a cherry-pick and a revert-shaped empty commit each consumed an approval and wrote
+# an audit line for a diff that never landed (review rounds 2–3, measured). An amend carries
+# content the gates never judged (they judge only what a commit ADDS to HEAD), so it is reported
+# as ungated — consistent with the "content already in HEAD is never re-judged" residual.
+if [ -z "$approved_tree" ] || [ "$approved_tree" != "$landed_tree" ]; then
+  advise "the approved tree does not match this commit"
+  exit 0
+fi
+if [ "$landed_parent" != "$approved_head" ]; then
+  advise "the approved verdict was for a commit on a different parent"
+  exit 0
+fi
+# This commit IS the approved attempt: execute the deferred consumption intents. The wip
+# one-shot is cleared FIRST so no early exit below can leave it armed for later commits — and the
+# removal is VERIFIED for the same reason the unlink loop below verifies its own: a `commit-wip`
+# that is a directory (a `mkdir -p` slip on the gate's own guidance) survives `rm -f` and grants
+# every later commit an open-ended AC exemption, silently (review round 5, M2).
+rm -f "$state/commit-wip"
+if [ -e "$state/commit-wip" ]; then
+  {
+    echo "HARNESS WARNING: could not consume $state/commit-wip — the WIP exemption is STILL ARMED and will apply to the next commit."
+    echo "  It is meant to be an empty FILE. If it is a directory, remove it: rm -rf .omp/harness-state/commit-wip"
+  } >&2
+fi
+
+# The dispatcher could not clear the previous attempt's state, so the intents present here may
+# not belong to THIS commit. Executing them would replay someone else's approval into the audit
+# log on every commit (review round 4, measured with a read-only pending-consume directory).
+if [ -f "$state/attempt-state-dirty" ]; then
+  {
+    echo "HARNESS WARNING: harness state could not be cleared by the pre-commit dispatcher, so deferred one-shot consumption is SKIPPED for this commit."
+    echo "  Remove the paths listed in .omp/harness-state/attempt-state-dirty, then retry."
+  } >&2
+  exit 0
+fi
+
+if [ -d "$pend" ]; then
+  for f in "$pend"/append-audit-*.json; do
+    [ -f "$f" ] || continue
+    mkdir -p "$repo_root/docs/harness"
+    if cat "$f" >> "$repo_root/docs/harness/audit.jsonl" 2>/dev/null; then
+      rm -f "$f"
+    else
+      # No retry exists (the next hook run clears the directory), so DROP every intent and leave
+      # the one-shot flags on disk: an un-recorded consumption would be worse than none. Say
+      # exactly what is still armed — silently leaving a backpressure-skip behind let a later
+      # commit sail past a FAIL verification state (review round 3, M2).
+      rm -f "$pend"/append-audit-*.json "$pend"/unlink-*
+      rmdir "$pend" 2>/dev/null || true
+      {
+        echo "HARNESS WARNING: could not append to docs/harness/audit.jsonl — no audit line was written and NOTHING was consumed."
+        echo "  Any one-shot flag you set (docs/harness/review-skip, docs/harness/backpressure-skip) is STILL ARMED and will apply to the next commit."
+        echo "  Fix the audit path, then remove those flags if you did not intend that."
+      } >&2
+      exit 0
+    fi
+  done
+  for f in "$pend"/unlink-*; do
+    [ -f "$f" ] || continue
+    target="$(head -n 1 "$f" | tr -d '\r\n')"
+    # Only the harness's own one-shot surfaces, and only as plain relative paths: a `..`
+    # segment could escape the repo (3-pass review, medium: lexical whitelist escape).
+    case "$target" in
+      *..*|/*) echo "HARNESS WARNING: refusing a suspicious consumption target '$target'." >&2 ;;
+      docs/harness/review-skip|docs/harness/backpressure-skip|docs/harness/acceptance-done|.omp/harness-state/*)
+        rm -f "$repo_root/$target"
+        # An unchecked rm is how the audit said "consumed" while the flag stayed ARMED, letting a
+        # later commit pass a FAILED verification state (review round 4, measured).
+        if [ -e "$repo_root/$target" ]; then
+          {
+            echo "HARNESS WARNING: recorded the consumption of $target but could NOT remove it — the flag is STILL ARMED and will apply to the next commit."
+            echo "  Remove it manually: rm -f $target"
+          } >&2
+        fi
+        ;;
+      *) echo "HARNESS WARNING: refusing an unrecognized consumption target '$target'." >&2 ;;
+    esac
+    rm -f "$f"
+  done
+  rmdir "$pend" 2>/dev/null || true
+fi
 exit 0

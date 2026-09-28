@@ -1,6 +1,6 @@
 # Code Review Checklist
 
-Quick-reference for code reviews. Full policy: [`rules/code_review_policy.md`](../rules/code_review_policy.md)
+Quick-reference for code reviews. Full policy: [`.omp/rules/harness-code_review_policy.md`](../.omp/rules/harness-code_review_policy.md)
 
 **Confidence gate**: only report findings you are >=80% confident are real problems. Put lower-confidence observations in a Notes section.
 
@@ -22,7 +22,7 @@ Quick-reference for code reviews. Full policy: [`rules/code_review_policy.md`](.
 
 ## Error handling (HIGH)
 
-Includes silent-failure patterns — see [`rules/code_review_policy.md`](../rules/code_review_policy.md#silent-failures-high) for full table.
+Includes silent-failure patterns — see [`.omp/rules/harness-code_review_policy.md`](../.omp/rules/harness-code_review_policy.md#silent-failures-high) for full table.
 
 - [ ] No unhandled promise rejections or unguarded async calls (missing `await` / `.catch`)
 - [ ] No empty catch blocks (`catch {}` / `except: pass`) that silently swallow failures

@@ -56,6 +56,6 @@ resources). It reads `issue://<n>`, runs the chosen stage, and **never auto-merg
 
 ## Verify before relying on it
 
-`gh-loop-runner.mjs` is unit-tested (`tests/gh-loop-runner.test.mjs`). The **workflow itself runs only
+`gh-loop-runner.mjs` is unit-tested (`.omp/extensions/harness/tests/gh-loop-runner.test.mjs`). The **workflow itself runs only
 on your runner** — the harness cannot live-verify it. Do a dry exercise on a throwaway private repo
 (label a test issue, comment as a non-bot write+ user) before trusting it on a real repo.

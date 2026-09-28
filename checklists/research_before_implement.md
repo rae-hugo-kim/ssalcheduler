@@ -12,7 +12,7 @@ Avoid reinventing the wheel. Before writing new code, verify that no existing so
 
 - [ ] **GitHub code search**: Run `gh search code` or `gh search repos` for existing implementations of the pattern/feature.
 - [ ] **Package registries**: Search npm / PyPI / crates.io / Go modules for utility libraries that solve the problem.
-- [ ] **Documentation search**: Use Context7 or web search for prior art, official examples, or recommended patterns.
+- [ ] **Documentation search**: Use the `librarian` agent, official docs, or web search for prior art, official examples, or recommended patterns.
 - [ ] **80% evaluation**: Does an existing solution cover 80%+ of the requirement? If yes, prefer adopting/adapting over writing net-new.
 - [ ] **Source attribution**: If adopting external code, note the source URL and license.
 - [ ] **Rejection rationale**: If writing net-new, document briefly why existing solutions were insufficient.

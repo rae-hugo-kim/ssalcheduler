@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# pre-commit: run the harness commit gates against the STAGED INDEX, in hook mode.
+#
+# This is the single blocking enforcement surface of the harness (seed
+# 20260729-132948-e510): git invokes it for plain commits, --amend, and
+# merge-conflict-resolution commits, regardless of how the commit was spelled or
+# who typed it. Integration paths (merge auto-commits, cherry-pick, revert, and
+# rebase replay) move already-gated commits and are deliberately NOT blocked; the
+# non-blocking post-commit/post-merge backstop observes them. One honest caveat:
+# conflict resolution during `git rebase --continue` can introduce genuinely new
+# content on a path this hook does not see — that residual is enumerated in
+# .omp/rules/harness-harness_integration_contract.md rather than defended here.
+#
+# Environment contract (measured, git 2.43.0): git runs this hook from the repo
+# toplevel with GIT_INDEX_FILE exported (GIT_DIR is NOT set for this hook) — for
+# `commit -a` and pathspec commits GIT_INDEX_FILE names the TEMPORARY index that
+# holds exactly what the commit will capture. It MUST be inherited untouched by the
+# dispatcher and its child gates, or `git diff --cached` shows the wrong content
+# (test-attack A-2). Do not sanitize the environment here.
+#
+# Fail policy: only a clean dispatcher exit 0 allows the commit. node missing,
+# dispatcher crash, or timeout all FAIL CLOSED (a gate that cannot render a
+# verdict must not pass a commit). Human emergency bypass: --no-verify
+# (observed by the post-commit backstop; the agent command layer trips on it).
+#
+# Shipped via harness-sync (.githooks/pre-commit) and activated by
+# `git config core.hooksPath .githooks`.
+set -u
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$repo_root" ]; then
+  echo "HARNESS BLOCK: pre-commit could not resolve the repo toplevel — refusing to pass an unattributable commit." >&2
+  exit 2
+fi
+
+dispatcher="$repo_root/.omp/extensions/harness/gates/commit-gates.mjs"
+# No harness in this repo (hook shipped ahead of the gates, or a pruned checkout):
+# out of jurisdiction — nothing to enforce here.
+[ -f "$dispatcher" ] || exit 0
+
+# node discovery: PATH first, then the explicit escape hatch for environments
+# whose PATH lacks node (nvm installs invisible to GUI apps / cron).
+node_bin="$(command -v node 2>/dev/null || true)"
+if [ -z "$node_bin" ] && [ -n "${OMP_NODE_BIN:-}" ] && [ -x "${OMP_NODE_BIN}" ]; then
+  node_bin="$OMP_NODE_BIN"
+fi
+if [ -z "$node_bin" ]; then
+  {
+    echo "HARNESS BLOCK: node not found on PATH — the commit gates cannot run, failing closed."
+    echo "  - nvm/GUI/cron environments often lack node on PATH: export OMP_NODE_BIN=/path/to/node (e.g. \$HOME/.nvm/versions/node/<ver>/bin/node) and retry."
+    echo "  - human emergency bypass (recorded by the backstop): git commit --no-verify"
+  } >&2
+  exit 2
+fi
+
+# Belt on top of the dispatcher's own per-child budgets: never let a hung gate
+# pin `git commit` forever (git waits on hooks indefinitely — test-attack B-3).
+run_dispatcher() {
+  if command -v timeout >/dev/null 2>&1; then
+    printf '%s' '{"mode":"hook","hook":"pre-commit"}' | timeout -k 5 60 "$node_bin" "$dispatcher"
+  else
+    printf '%s' '{"mode":"hook","hook":"pre-commit"}' | "$node_bin" "$dispatcher"
+  fi
+}
+
+run_dispatcher
+status=$?
+if [ "$status" -eq 0 ]; then
+  exit 0
+fi
+if [ "$status" -ne 2 ]; then
+  # crash / timeout(124) / kill — the dispatcher rendered no verdict: fail closed.
+  echo "HARNESS BLOCK: commit-gates did not render a verdict (exit $status); failing closed. Debug: printf '{\"mode\":\"hook\",\"hook\":\"pre-commit\"}' | node .omp/extensions/harness/gates/commit-gates.mjs" >&2
+fi
+exit 2

@@ -135,7 +135,7 @@ Use `assets/test_plan_template.md` for full template.
 
 ### ⛔ GATE 1.5: Test Attack Gate (적대적 검증)
 
-test-plan.md 저장 후 자동 실행. 정책: [`rules/adversarial_review.md`](../../../rules/adversarial_review.md)
+test-plan.md 저장 후 자동 실행. 정책: [`.omp/rules/harness-adversarial_review.md`](../../../.omp/rules/harness-adversarial_review.md)
 
 ```
 1. test-engineer 에이전트 (sonnet) 호출:
@@ -233,7 +233,7 @@ Use `references/implementation_checklist.md` for full checklist.
 ### ⛔ GATE 3.5: Completion Attack Gate (적대적 검증 — Architect Verification 확장)
 
 GATE 3 통과 후 자동 실행. 기존 Mandatory Architect Verification을 **대체하지 않고 확장**한다.
-정책: [`rules/adversarial_review.md`](../../../rules/adversarial_review.md)
+정책: [`.omp/rules/harness-adversarial_review.md`](../../../.omp/rules/harness-adversarial_review.md)
 
 ```
 1. 병렬 에이전트 호출:

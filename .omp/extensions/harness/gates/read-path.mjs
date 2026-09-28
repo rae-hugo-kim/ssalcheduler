@@ -12,15 +12,20 @@
 import { resolve } from "node:path";
 
 // read.md selector grammar (path-utils splitPathAndSel):
-//   :raw            :conflicts
+//   :raw            :conflicts      :img            (:img — SVG/SVGZ rendered as PNG, omp 18.2.9+;
+//                                                    standalone only, never combined with a range)
 //   :N  :LN  :N-  :N..              (start / open-ended)
+//   :-N                             (tail: last N lines — advertised in the read tool
+//                                    description; live-verified omp 18.3.0 2026-09-24 incl.
+//                                    `:raw:-N`. Unstripped it left `current-scope.md:-3`
+//                                    in read-log)
 //   :A-B  :LA-LB  :A..B             (range; `..` is a forgiving `-` alias)
 //   :A+C  :LA+LC                    (count)
 //   :R1,R2,...                      (comma multi-range)
-//   :range:raw  |  :raw:range       (raw output, EITHER order)
-const RANGE = String.raw`L?\d+(?:(?:[-+]|\.\.)L?\d*)?(?:,L?\d+(?:(?:[-+]|\.\.)L?\d*)?)*`;
+//   :range:raw  |  :raw:range       (raw output, EITHER order; range here includes :-N)
+const RANGE = String.raw`(?:-\d+|L?\d+(?:(?:[-+]|\.\.)L?\d*)?(?:,L?\d+(?:(?:[-+]|\.\.)L?\d*)?)*)`;
 export const READ_SELECTOR = new RegExp(
-	String.raw`:(?:raw(?::${RANGE})?|conflicts|${RANGE}(?::raw)?)$`,
+	String.raw`:(?:raw(?::${RANGE})?|conflicts|img|${RANGE}(?::raw)?)$`,
 );
 
 /** True for any virtual/remote target: canonical `scheme://…` anywhere in the
@@ -46,9 +51,13 @@ export function readTarget(input, cwd) {
  *  silently dropped legitimate files like `pkg:/danger.ts` from BOTH the
  *  pre-edit gate and the ledgers — worse than a phantom entry. An unknown
  *  future virtual scheme in single-slash form degrades to a phantom (the r2
- *  failure class, annoying but safe); extend the list when one appears. */
+ *  failure class, annoying but safe); extend the list when one appears.
+ *  `proc` (job/service control: `write proc://<id>/kill`, `proc://<name>/mode`,
+ *  `read proc://`) and `conflict` (write-only merge resolution) were added for
+ *  omp 18.3.0 (2026-09-24, #42) — the single-slash form is defensive, only `xd`
+ *  has been observed normalized. */
 const URI_SCHEME_PREFIX =
-	/^(?:xd|local|memory|artifact|agent|history|mcp|skill|rule|omp|issue|pr|ssh|https?|file):\//i;
+	/^(?:xd|local|memory|artifact|agent|history|mcp|skill|rule|omp|issue|pr|ssh|proc|conflict|https?|file):\//i;
 
 /** Absolute path of a mutating tool's target when it names a LOCAL file; null
  *  for URI-scheme targets — both the canonical `xd://…` form (`://` anywhere)

@@ -91,6 +91,26 @@ git ls-files docs/sum docs/reviews docs/brainstorming | head -5
 
 출력: "✓ repo hygiene: archives untracked + hooksPath=.githooks"
 
+### Phase 2.6: 페르소나 프리셋 대체 (자동, 부재 시만)
+
+omp의 기본 페르소나 프리셋(`personality: default` = "Terse, evidence-first engineer …
+Fragments when clearer")은 하네스 문체 규칙(경어체·완결 문장, `rule://harness-core`)과
+충돌한다(#49, ADR 002 D칸). 사용자 디렉터리의 `PERSONALITY.md`가 그 프리셋 블록만 대체하므로
+(omp 18.3.0 실측 2026-09-26; 프로젝트 레벨 파일은 탐색되지 않음) 하네스 템플릿을 복사한다 —
+**이미 있으면 절대 덮어쓰지 않는다**(사용자 커스텀 보존):
+
+```bash
+AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
+if [ -f "$AGENT_DIR/PERSONALITY.md" ]; then
+  echo "✓ persona: $AGENT_DIR/PERSONALITY.md already present (kept as is)"
+else
+  mkdir -p "$AGENT_DIR" && cp templates/PERSONALITY.md "$AGENT_DIR/PERSONALITY.md" \
+    && echo "✓ persona: templates/PERSONALITY.md → $AGENT_DIR/PERSONALITY.md (replaces the terse preset)"
+fi
+```
+
+새 세션부터 적용된다. 확인: `omp -p --no-session --no-rules --no-skills --no-extensions "Does your system prompt contain 'Fragments when clearer'? YES/NO"` → NO.
+
 ### Phase 3: 범용 MCP 서버 등록 (자동)
 
 MCP 서버는 OMP 자체 MCP 설정에 등록한다 (`~/.claude.json` 아님).
@@ -99,8 +119,6 @@ MCP 서버는 OMP 자체 MCP 설정에 등록한다 (`~/.claude.json` 아님).
 
 이미 등록된 서버는 스킵. 미등록 서버만 추가:
 
-- **context7** — 라이브러리/프레임워크 공식 문서 조회: `npx -y @upstash/context7-mcp@latest`
-- **serena** — 시맨틱 코드 탐색/리팩토링: `uvx --from "git+https://github.com/oraios/serena" serena start-mcp-server`
 - **exa** — AI 웹 검색 (HTTP transport): `https://mcp.exa.ai/mcp`
 - **browser-tools-mcp** — 브라우저 콘솔/네트워크/스크린샷: `npx -y @agentdeskai/browser-tools-mcp@1.2.0`
 
@@ -137,12 +155,11 @@ MCP 서버는 OMP 자체 MCP 설정에 등록한다 (`~/.claude.json` 아님).
 ### Installed
 - ✓ OMC vX.Y.Z (또는 — not installed)
 - ✓ docs viewer: Obsidian (no tooling)
+- ✓ persona: ~/.omp/agent/PERSONALITY.md (copied | already present)
 
 ### MCP Servers
 | Server | Status |
 |--------|--------|
-| context7 | ✓ registered |
-| serena | ✓ registered |
 | exa | ✓ registered |
 | browser-tools-mcp | ✓ registered |
 | supabase | ✓ registered (또는 — skipped) |

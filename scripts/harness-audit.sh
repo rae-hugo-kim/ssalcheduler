@@ -144,10 +144,10 @@ score_tool_coverage() {
     skip tool_coverage "scripts/"
   fi
 
-  if exists "rules/agent_routing.md"; then
-    award tool_coverage 1 "rules/agent_routing.md"
+  if exists ".omp/rules/harness-agent_routing.md"; then
+    award tool_coverage 1 ".omp/rules/harness-agent_routing.md"
   else
-    skip tool_coverage "rules/agent_routing.md"
+    skip tool_coverage ".omp/rules/harness-agent_routing.md"
   fi
 
   if has_pattern "AGENTS.md" "model_routing" || has_pattern "AGENTS.md" "model routing"; then
@@ -159,20 +159,20 @@ score_tool_coverage() {
 
 # --- 2. Context Efficiency ---
 score_context_efficiency() {
-  if exists "rules/context_management.md"; then
-    award context_efficiency 3 "rules/context_management.md"
+  if exists ".omp/rules/harness-context_management.md"; then
+    award context_efficiency 3 ".omp/rules/harness-context_management.md"
   else
-    skip context_efficiency "rules/context_management.md"
+    skip context_efficiency ".omp/rules/harness-context_management.md"
   fi
 
-  if exists "rules/session_persistence.md"; then
-    award context_efficiency 2 "rules/session_persistence.md"
+  if exists ".omp/rules/harness-session_persistence.md"; then
+    award context_efficiency 2 ".omp/rules/harness-session_persistence.md"
   else
-    skip context_efficiency "rules/session_persistence.md"
+    skip context_efficiency ".omp/rules/harness-session_persistence.md"
   fi
 
-  if grep -rqF ".omp/state" "$ROOT/AGENTS.md" "$ROOT/rules" 2>/dev/null; then
-    award context_efficiency 2 ".omp/state referenced in rules/AGENTS.md"
+  if grep -rqF ".omp/state" "$ROOT/AGENTS.md" "$ROOT/.omp/rules" 2>/dev/null; then
+    award context_efficiency 2 ".omp/state referenced in .omp/rules/ or AGENTS.md"
   else
     skip context_efficiency ".omp/state reference"
   fi
@@ -180,10 +180,10 @@ score_context_efficiency() {
 
 # --- 3. Quality Gates ---
 score_quality_gates() {
-  if exists "rules/code_review_policy.md"; then
-    award quality_gates 2 "rules/code_review_policy.md"
+  if exists ".omp/rules/harness-code_review_policy.md"; then
+    award quality_gates 2 ".omp/rules/harness-code_review_policy.md"
   else
-    skip quality_gates "rules/code_review_policy.md"
+    skip quality_gates ".omp/rules/harness-code_review_policy.md"
   fi
 
   if exists "checklists/code_review.md"; then
@@ -204,25 +204,25 @@ score_quality_gates() {
     skip quality_gates "backpressure-gate gate"
   fi
 
-  if exists "rules/quality_gates.md"; then
-    award quality_gates 1 "rules/quality_gates.md"
+  if exists ".omp/rules/harness-quality_gates.md"; then
+    award quality_gates 1 ".omp/rules/harness-quality_gates.md"
   else
-    skip quality_gates "rules/quality_gates.md"
+    skip quality_gates ".omp/rules/harness-quality_gates.md"
   fi
 
-  if exists "rules/verification_tests_and_evals.md"; then
-    award quality_gates 2 "rules/verification_tests_and_evals.md"
+  if exists ".omp/rules/harness-verification_tests_and_evals.md"; then
+    award quality_gates 2 ".omp/rules/harness-verification_tests_and_evals.md"
   else
-    skip quality_gates "rules/verification_tests_and_evals.md"
+    skip quality_gates ".omp/rules/harness-verification_tests_and_evals.md"
   fi
 }
 
 # --- 4. Memory Persistence ---
 score_memory_persistence() {
-  if exists "rules/session_persistence.md"; then
-    award memory_persistence 2 "rules/session_persistence.md"
+  if exists ".omp/rules/harness-session_persistence.md"; then
+    award memory_persistence 2 ".omp/rules/harness-session_persistence.md"
   else
-    skip memory_persistence "rules/session_persistence.md"
+    skip memory_persistence ".omp/rules/harness-session_persistence.md"
   fi
 
   if has_pattern "AGENTS.md" "auto memory" \
@@ -233,7 +233,7 @@ score_memory_persistence() {
     skip memory_persistence "AGENTS.md auto-memory reference"
   fi
 
-  if grep -rqF ".omp/state/sessions" "$ROOT/AGENTS.md" "$ROOT/rules" 2>/dev/null; then
+  if grep -rqF ".omp/state/sessions" "$ROOT/AGENTS.md" "$ROOT/.omp/rules" 2>/dev/null; then
     award memory_persistence 2 ".omp/state/sessions referenced"
   else
     skip memory_persistence ".omp/state/sessions reference"
@@ -241,7 +241,7 @@ score_memory_persistence() {
 
   # 'sum' skill mentioned in AGENTS.md or rules
   if grep -rqwF "sum" "$ROOT/AGENTS.md" 2>/dev/null \
-    || grep -rqwF "sum" "$ROOT/rules" 2>/dev/null; then
+    || grep -rqwF "sum" "$ROOT/.omp/rules" 2>/dev/null; then
     award memory_persistence 3 "sum skill referenced"
   else
     skip memory_persistence "sum skill reference"
@@ -268,8 +268,8 @@ score_eval_coverage() {
     skip eval_coverage "checklists/eval.md"
   fi
 
-  if has_pattern "rules/verification_tests_and_evals.md" "Eval-Driven Development" \
-    || has_pattern "rules/verification_tests_and_evals.md" "EDD"; then
+  if has_pattern ".omp/rules/harness-verification_tests_and_evals.md" "Eval-Driven Development" \
+    || has_pattern ".omp/rules/harness-verification_tests_and_evals.md" "EDD"; then
     award eval_coverage 2 "EDD section in verification rule"
   else
     skip eval_coverage "EDD section"
@@ -284,16 +284,16 @@ score_eval_coverage() {
 
 # --- 6. Security Guardrails ---
 score_security_guardrails() {
-  if exists "rules/safety_security.md"; then
-    award security_guardrails 2 "rules/safety_security.md"
+  if exists ".omp/rules/harness-safety_security.md"; then
+    award security_guardrails 2 ".omp/rules/harness-safety_security.md"
   else
-    skip security_guardrails "rules/safety_security.md"
+    skip security_guardrails ".omp/rules/harness-safety_security.md"
   fi
 
-  if exists "rules/agent_security.md"; then
-    award security_guardrails 2 "rules/agent_security.md"
+  if exists ".omp/rules/harness-agent_security.md"; then
+    award security_guardrails 2 ".omp/rules/harness-agent_security.md"
   else
-    skip security_guardrails "rules/agent_security.md"
+    skip security_guardrails ".omp/rules/harness-agent_security.md"
   fi
 
   if compgen -G "$ROOT/.omp/extensions/harness/gates/destructive-guard.*" >/dev/null 2>&1; then
@@ -308,9 +308,9 @@ score_security_guardrails() {
     skip security_guardrails "mcp-gate gate"
   fi
 
-  if grep -rqiF "secret" "$ROOT/rules" 2>/dev/null \
-    || grep -rqiF "credential" "$ROOT/rules" 2>/dev/null; then
-    award security_guardrails 1 "secret/credential keyword in rules/"
+  if grep -rqiF "secret" "$ROOT/.omp/rules" 2>/dev/null \
+    || grep -rqiF "credential" "$ROOT/.omp/rules" 2>/dev/null; then
+    award security_guardrails 1 "secret/credential keyword in .omp/rules/"
   else
     skip security_guardrails "secret/credential keyword"
   fi
@@ -318,10 +318,10 @@ score_security_guardrails() {
 
 # --- 7. Cost Efficiency ---
 score_cost_efficiency() {
-  if exists "rules/cost_awareness.md"; then
-    award cost_efficiency 3 "rules/cost_awareness.md"
+  if exists ".omp/rules/harness-cost_awareness.md"; then
+    award cost_efficiency 3 ".omp/rules/harness-cost_awareness.md"
   else
-    skip cost_efficiency "rules/cost_awareness.md"
+    skip cost_efficiency ".omp/rules/harness-cost_awareness.md"
   fi
 
   if has_pattern "AGENTS.md" "model_routing" || has_pattern "AGENTS.md" "model routing"; then
@@ -330,15 +330,15 @@ score_cost_efficiency() {
     skip cost_efficiency "AGENTS.md model routing"
   fi
 
-  if exists "rules/context_management.md"; then
-    award cost_efficiency 2 "rules/context_management.md"
+  if exists ".omp/rules/harness-context_management.md"; then
+    award cost_efficiency 2 ".omp/rules/harness-context_management.md"
   else
-    skip cost_efficiency "rules/context_management.md"
+    skip cost_efficiency ".omp/rules/harness-context_management.md"
   fi
 
-  if grep -rqiF "token budget" "$ROOT/rules" 2>/dev/null \
+  if grep -rqiF "token budget" "$ROOT/.omp/rules" 2>/dev/null \
     || grep -rqiF "token budget" "$ROOT/AGENTS.md" 2>/dev/null \
-    || grep -rqiF "token-budget" "$ROOT/rules" 2>/dev/null; then
+    || grep -rqiF "token-budget" "$ROOT/.omp/rules" 2>/dev/null; then
     award cost_efficiency 2 "token budget guidance"
   else
     skip cost_efficiency "token budget guidance"

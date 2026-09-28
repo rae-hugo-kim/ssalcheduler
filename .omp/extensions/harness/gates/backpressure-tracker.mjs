@@ -37,7 +37,7 @@ log(`Command: ${command}`);
 // Classify via the shared leading-token matcher (backpressure-patterns.mjs),
 // which only matches a verification command at the start of a shell segment —
 // not `echo "npm test"` or `grep -r "npm test"`.
-const { isVerification, type: verificationType, passReliable } = classifyVerification(command);
+const { isVerification, type: verificationType, passReliable } = classifyVerification(command, cwd);
 
 log(`Is verification: ${isVerification}, type: ${verificationType}, passReliable: ${passReliable}`);
 

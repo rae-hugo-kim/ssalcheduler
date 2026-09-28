@@ -1,7 +1,7 @@
 ---
 name: verifier
 description: Acceptance criteria and harness gate verifier — checks AC completion, test status, and harness compliance
-model: opus
+model: ["@task", "@default"]
 tools: read, bash, grep, glob, lsp
 ---
 

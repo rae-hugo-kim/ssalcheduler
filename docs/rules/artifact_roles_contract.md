@@ -11,7 +11,7 @@
 근거: `claudedocs/harness-auto-capture-analysis.md` Q7(SSOT 경계)·Q8(역할 분리 2-tier + 원장).
 
 ## Scope
-이 계약은 `docs/harness/seed.yaml`·`docs/harness/current-scope.md`·`docs/harness/audit.jsonl`의 **상호 역할과 성장 정책**에 적용된다.
+이 계약은 `docs/harness/seed.yaml`·`docs/harness/current-scope.md`·`docs/harness/audit.jsonl`의 **상호 역할과 성장 정책**, 그리고 그 앞단 입력인 `docs/handoff/handoff_*.md`의 **보관 정책**(§Handoff)에 적용된다.
 
 비목표:
 - 각 파일의 내부 스키마(필수 필드·검증 규칙) — `seed_contract.md`가 정의한다.
@@ -122,6 +122,20 @@ thread_id ──▶ seed_task_id + seed_version   (provenance: 어느 seed의 �
 - **`audit.jsonl`은 append만.** 덮어쓰기·정리(truncate)는 금지. 무한 성장이 이 파일에서는 올바른 동작이다.
 - seed/scope의 "연속성"은 목표가 아니다. 역할 tiering + 원장이 R1/R2를 충족하면 파일은 작게 유지된다.
 
+## Handoff — seed의 전신 (pre-seed 입력)
+
+다른 세션(주로 chats 리포)이 omp 작업 세션으로 문제 정의·분석·후보안을 넘길 때 쓰는 문서다. **3-tier 밖의 입력**이며, 어느 tier의 권위도 갖지 않는다.
+
+| 항목 | 규칙 |
+|---|---|
+| 위치 | `docs/handoff/handoff_<YYYY-MM-DD>_<topic>.md`. `docs/harness/`(런타임 아티팩트)에 두지 않는다. |
+| 커밋 시점 | **이슈 발행과 동시에 커밋**한다. 이슈 본문은 요약 + 이 파일 링크만 담는다. 미추적 상태로 워크트리에 남겨 두지 않는다(다른 워크트리·머신에서 보이지 않는다). |
+| 역할 | kickoff의 입력. kickoff가 이 문서에서 `seed.yaml`을 만들면 **권위는 seed로 넘어간다** — 이후 핸드오프와 seed가 어긋나면 seed가 원본이다. |
+| 마감 후 | **삭제하지 않는다.** 구현이 main에 도달하면 첫 줄 아래 상태 행을 `- 상태: 마감 (#N / <sha>)`로 갱신한다. 배경·기각 대안의 기록이므로 보존하되, **지시로 읽지 않는다** — 마감된 핸드오프는 참고 자료다. |
+| 상태 행 | 문서 상단 메타 블록에 `- 상태: …` 한 줄. 작성 시 `합의 완료, 구현 미착수 (#N)`처럼 진행 상태를, 마감 시 위 형식을 쓴다. |
+
+`current-scope.md`와 달리 은퇴(삭제)하지 않는 이유: scope는 seed의 투영이라 seed + audit가 내용을 보존하지만, 핸드오프의 배경 분석·기각 대안은 다른 어디에도 남지 않는다. 성장 속도는 사이클당 최대 1건이라 bounded 우려는 낮다.
+
 ## Anti-Patterns
 
 - 무관한 반복 작업을 기존 seed에 계속 append해 seed를 무한 성장시키기 (→ 새 seed).
@@ -129,6 +143,8 @@ thread_id ──▶ seed_task_id + seed_version   (provenance: 어느 seed의 �
 - 완료된 AC `[x]`를 `current-scope.md`/`seed.yaml`에 영구 보관하기 (→ closeout 은퇴 + audit).
 - `audit.jsonl`을 덮어쓰거나 정리하기 (→ append-only).
 - 커밋 메시지에 `thread_id`/`task_id`를 남기지 않아 git ↔ audit 링크가 끊기기 (→ R2 위반).
+- 핸드오프를 `docs/harness/`에 두거나 미추적 상태로 워크트리에만 남기기 (→ `docs/handoff/` + 이슈 발행 시 커밋).
+- 마감된 핸드오프를 현행 스펙으로 읽고 작업하기 (→ 진실은 `seed.yaml`; 핸드오프는 배경 참고).
 
 ## Cross-References
 

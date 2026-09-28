@@ -36,7 +36,7 @@ function log(msg) {
 const command = data?.tool_input?.command || '';
 // Failure capture is liberal: any matched verification segment -> FAIL
 // (over-blocking on a chained `verify && other` failure is fail-safe).
-const { isVerification, type } = classifyVerification(command);
+const { isVerification, type } = classifyVerification(command, cwd);
 log(`Command: ${command}`);
 log(`Is verification: ${isVerification}, type: ${type}`);
 

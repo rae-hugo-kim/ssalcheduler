@@ -8,7 +8,6 @@
 // This is NOT a blocking gate: it always exits 0. It records facts, never judges.
 
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'fs';
-import { execSync } from 'child_process';
 import { join, relative, basename } from 'path';
 import { isGitCommit } from './git-commit-detect.mjs';
 import { classifyVerification } from './backpressure-patterns.mjs';
@@ -29,17 +28,27 @@ function entry() {
   if (tool === 'Bash') {
     const command = String(input.command || '');
     if (!command) return null;
+    // index.ts passes the bash outcome through tool_input: `pending` for a background-start
+    // result (no verdict yet — the job finishes via onUpdate, never a tool_result), `failed`
+    // for a non-zero exit / isError, and for commits `landed` + `hash` from its HEAD snapshot
+    // of the TARGET repo (`git -C other …` names the other repo — #22). PENDING never becomes
+    // PASS/FAIL in this log: the agent must rerun a backgrounded verification in the
+    // foreground for backpressure to see it. `landed: false` means the target repo gained no
+    // commit — a gate-blocked (or no-op) commit, whatever the shell exit said (#48-6) — so no
+    // hash is recorded. Without `landed` the target repo could not be resolved (`cd x && git
+    // commit`, `$VAR` in -C …): the exit code decides FAIL vs UNVERIFIED, and NO hash is
+    // guessed — the session cwd's HEAD is exactly the #22 misattribution.
     if (isGitCommit(command)) {
       const cmd = command.slice(0, 80);
+      if (input.pending) return { kind: 'commit', result: 'PENDING', cmd };
+      if (input.landed === false) return { kind: 'commit', result: 'BLOCKED', cmd };
+      if (input.landed === true) return { kind: 'commit', hash: input.hash, cmd };
       if (input.failed) return { kind: 'commit', result: 'FAIL', cmd };
-      let hash;
-      try { hash = execSync('git rev-parse --short HEAD', { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch {}
-      return { kind: 'commit', hash, cmd };
+      return { kind: 'commit', result: 'UNVERIFIED', cmd };
     }
-    const { isVerification, type } = classifyVerification(command);
+    const { isVerification, type } = classifyVerification(command, cwd);
     if (isVerification) {
-      // index.ts passes the bash failure signal through tool_input.failed.
-      return { kind: 'test', type, result: input.failed ? 'FAIL' : 'PASS' };
+      return { kind: 'test', type, result: input.pending ? 'PENDING' : input.failed ? 'FAIL' : 'PASS' };
     }
     return null; // ordinary bash (ls/cat/...) is noise — skip
   }

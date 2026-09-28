@@ -26,7 +26,12 @@ if (newWorkPatterns.test(prompt)) {
   const kickoffFile = join(cwd, 'docs', 'harness', 'kickoff-done');
 
   if (!existsSync(kickoffFile)) {
-    console.log('HARNESS REMINDER: New work detected. Consider defining scope (MUST/SHOULD/NOT) and acceptance criteria before implementation.');
+    console.log(
+      'HARNESS REMINDER: New work detected. Apply cycle intake (.omp/rules/harness-cycle_definition.md): ' +
+      'write the one-line completion check FIRST; if the request spans multiple cycles, propose a ' +
+      'numbered decomposition (each cycle with its own check sentence) before implementing. ' +
+      'For project/feature-scale scope, recommend /kickoff (scope MUST/SHOULD/NOT + acceptance criteria).'
+    );
   }
 }
 
